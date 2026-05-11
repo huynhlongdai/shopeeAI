@@ -59,7 +59,7 @@ async function collectShopeeProduct() {
     title: document.title,
     shopId: ids?.shopId,
     itemId: ids?.itemId,
-    name: apiProduct?.name || normalizeText(document.querySelector('h1')?.textContent) || titleName(),
+    name: apiProduct?.name || getCurrentProductTitle() || titleName(),
     description: apiProduct?.description || extractDescription(bodyText),
     salePrice: apiProduct?.salePrice ?? salePrice,
     originalPrice: apiProduct?.originalPrice ?? originalPrice,
@@ -1017,8 +1017,8 @@ function initProductDetailTools() {
   if (existing?.dataset.productKey === key) return;
   existing?.remove();
 
-  const title = document.querySelector('h1');
-  if (!title) return;
+  const mount = findProductDetailToolbarMount();
+  if (!mount) return;
 
   const toolbar = document.createElement('div');
   toolbar.id = 'slpc-detail-tools';
@@ -1040,7 +1040,80 @@ function initProductDetailTools() {
     event.stopPropagation();
     handleProductDetailAction(button.dataset.slpcDetailAction, button);
   });
-  title.insertAdjacentElement('afterend', toolbar);
+  mount.insertAdjacentElement('afterend', toolbar);
+}
+
+function findProductDetailToolbarMount() {
+  const heading = document.querySelector('h1');
+  if (isVisibleElement(heading)) return heading;
+
+  const infoTitle = findProductInfoColumnTitle();
+  if (infoTitle) return infoTitle;
+
+  const expectedName = titleName();
+  const titleLike = [...document.querySelectorAll('main div, main span, body div, body span')]
+    .filter((element) => isVisibleElement(element))
+    .map((element) => ({ element, text: normalizeText(element.textContent) }))
+    .filter(({ element, text }) => {
+      const rect = element.getBoundingClientRect();
+      return text.length >= 35
+        && text.length <= 240
+        && rect.width >= 360
+        && rect.top >= 120
+        && rect.top <= Math.max(window.innerHeight, 900)
+        && !/Shopee Home|Download|Follow us|Notifications|Search in Shopee|Add To Cart|Buy Now/i.test(text);
+    })
+    .sort((a, b) => a.element.getBoundingClientRect().top - b.element.getBoundingClientRect().top);
+
+  const titleMatch = titleLike.find(({ text }) =>
+    expectedName && (text.includes(expectedName.slice(0, 45)) || expectedName.includes(text.slice(0, 45))),
+  );
+  if (titleMatch) return titleMatch.element;
+
+  return titleLike[0]?.element;
+}
+
+function findProductInfoColumnTitle() {
+  const ratingAnchor = [...document.querySelectorAll('body div, body span')]
+    .find((element) => isVisibleElement(element) && /ratings?\s+[\s\S]{0,60}\bsold\b/i.test(normalizeText(element.textContent)));
+  const productColumn = findProductInfoColumn(ratingAnchor);
+  if (!productColumn) return undefined;
+
+  return [...productColumn.querySelectorAll('div, span')]
+    .filter((element) => isVisibleElement(element))
+    .map((element) => ({ element, text: normalizeText(element.textContent) }))
+    .filter(({ element, text }) => {
+      const rect = element.getBoundingClientRect();
+      return text.length >= 35
+        && text.length <= 240
+        && rect.top >= productColumn.getBoundingClientRect().top
+        && !/ratings?|sold|₫|shipping|quantity|add to cart|buy now/i.test(text);
+    })
+    .sort((a, b) => a.element.getBoundingClientRect().top - b.element.getBoundingClientRect().top)[0]?.element;
+}
+
+function findProductInfoColumn(seed) {
+  let node = seed;
+  for (let index = 0; node && index < 10; index += 1, node = node.parentElement) {
+    if (!isVisibleElement(node)) continue;
+    const text = normalizeText(node.textContent);
+    const rect = node.getBoundingClientRect();
+    if (rect.width >= 520 && /ratings?/i.test(text) && /\bsold\b/i.test(text) && /₫/.test(text)) {
+      return node;
+    }
+  }
+  return undefined;
+}
+
+function isVisibleElement(element) {
+  if (!(element instanceof HTMLElement)) return false;
+  const rect = element.getBoundingClientRect();
+  const style = getComputedStyle(element);
+  return rect.width > 0
+    && rect.height > 0
+    && style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && Number(style.opacity || 1) > 0;
 }
 
 function initProductCardTools() {
@@ -1188,7 +1261,7 @@ async function handleProductDetailAction(action, button) {
     }
 
     if (action === 'copy-name') {
-      const name = normalizeText(document.querySelector('h1')?.textContent) || latestCollectedProduct?.name || titleName();
+      const name = getCurrentProductTitle() || latestCollectedProduct?.name || titleName();
       await navigator.clipboard.writeText(name);
       button.textContent = 'OK';
       return;
@@ -1231,6 +1304,13 @@ async function handleProductDetailAction(action, button) {
       button.textContent = originalText;
     }, 1600);
   }
+}
+
+function getCurrentProductTitle() {
+  const heading = document.querySelector('h1');
+  if (isVisibleElement(heading)) return normalizeText(heading.textContent);
+  const mount = findProductDetailToolbarMount();
+  return normalizeText(mount?.textContent);
 }
 
 async function collectCurrentProductForDetail() {

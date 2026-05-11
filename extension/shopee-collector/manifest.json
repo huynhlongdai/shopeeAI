@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "shopeeAI",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Collects Shopee product data, media, and affiliate links from your real Chrome session.",
   "permissions": ["alarms", "clipboardWrite", "downloads", "scripting", "storage", "tabs"],
   "host_permissions": [
