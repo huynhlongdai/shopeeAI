@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>shopeeAI Manager</title>
+    <link rel="stylesheet" href="manager.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">SC</div>
+        <div>
+          <h1>shopeeAI</h1>
+          <p>Queue, affiliate links, product data, media, and result review.</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="serverStatus" class="pill">Checking</span>
+        <button id="checkServer" class="ghost">Check server</button>
+        <button id="runQueue">Run queue</button>
+        <button id="openSettings" class="ghost">Settings</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="workbench">
+        <section class="card">
+          <div class="card-head">
+            <h2>New Job</h2>
+            <span class="hint">Create</span>
+          </div>
+          <label>Job type
+            <select id="jobType">
+              <option value="product-affiliate">Product + affiliate</option>
+              <option value="product-info">Product info</option>
+              <option value="product-links">Product links</option>
+              <option value="affiliate-links">Affiliate links only</option>
+            </select>
+          </label>
+          <label>Product or listing URL
+            <textarea id="jobUrl" rows="5" placeholder="Paste one product URL, listing URL, or multiple product URLs for affiliate-links"></textarea>
+          </label>
+          <div class="grid-2">
+            <label>Keyword
+              <input id="keyword" placeholder="ốp lưng iphone">
+            </label>
+            <label>Limit
+              <input id="limit" type="number" min="1" max="500" value="20">
+            </label>
+          </div>
+          <label>Target profile
+            <input id="targetProfileId" placeholder="Blank = any online profile">
+          </label>
+          <div class="subids">
+            <label>Sub ID 1
+              <input id="subId1" value="n8n">
+            </label>
+            <label>Sub ID 2
+              <input id="subId2">
+            </label>
+            <label>Sub ID 3
+              <input id="subId3">
+            </label>
+            <label>Sub ID 4
+              <input id="subId4">
+            </label>
+            <label>Sub ID 5
+              <input id="subId5">
+            </label>
+          </div>
+          <button id="createJob" class="primary wide-btn">Create job</button>
+        </section>
+
+        <section class="card queue-card">
+          <div class="section-head">
+            <div>
+              <h2>Queue</h2>
+              <p class="muted">Created jobs and active queue.</p>
+            </div>
+            <div class="toolbar">
+              <select id="filterStatus" aria-label="Filter jobs">
+                <option value="all">All statuses</option>
+                <option value="queued">Queued</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <button id="refreshJobs" class="secondary">Refresh</button>
+              <button id="clearCompleted" class="secondary">Clear completed</button>
+            </div>
+          </div>
+          <section class="stats">
+            <article class="stat"><span>Queued</span><strong id="statQueued">0</strong></article>
+            <article class="stat"><span>Running</span><strong id="statRunning">0</strong></article>
+            <article class="stat"><span>Completed</span><strong id="statCompleted">0</strong></article>
+            <article class="stat"><span>Failed</span><strong id="statFailed">0</strong></article>
+          </section>
+          <div class="table-head">
+            <span>ID</span>
+            <span>Type</span>
+            <span>Target</span>
+            <span>Status</span>
+            <span>Updated</span>
+            <span></span>
+          </div>
+          <div id="jobs" class="jobs"></div>
+        </section>
+      </section>
+
+      <section class="result-grid">
+        <section class="card result-card parsed-result">
+          <div class="section-head">
+            <div>
+              <h2>Result</h2>
+              <p class="muted">Readable output split from JSON.</p>
+            </div>
+          </div>
+          <div id="resultSummary" class="result-summary empty">Select a job from the queue.</div>
+          <div class="action-grid">
+            <button id="copyProductName" class="secondary">Copy name</button>
+            <button id="copyDescription" class="secondary">Copy description</button>
+            <button id="copyProductLink" class="secondary">Copy product link</button>
+            <button id="copyAffiliateLink" class="secondary">Copy affiliate link</button>
+            <button id="downloadImages" class="secondary">Download images</button>
+            <button id="downloadVideos" class="secondary">Download videos</button>
+          </div>
+        </section>
+        <section class="card result-card json-result">
+          <div class="section-head">
+            <div>
+              <h2>JSON</h2>
+              <p class="muted">Raw payload for automation.</p>
+            </div>
+            <button id="copyResult" class="secondary">Copy JSON</button>
+          </div>
+          <pre id="resultJson"></pre>
+        </section>
+      </section>
+    </main>
+
+    <aside id="settingsDrawer" class="settings-drawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="closeSettings"></div>
+      <section class="drawer-panel">
+        <div class="section-head">
+          <div>
+            <h2>Settings</h2>
+            <p class="muted">API, profile, and auto-run.</p>
+          </div>
+          <button id="closeSettingsButton" class="ghost">Close</button>
+        </div>
+        <label>API base
+          <input id="apiBase" autocomplete="off">
+        </label>
+        <label>API token
+          <input id="apiToken" autocomplete="off">
+        </label>
+        <label>Affiliate URL
+          <input id="affiliateUrl" autocomplete="off">
+        </label>
+        <div class="grid-2-even">
+          <label>Profile ID
+            <input id="profileId" autocomplete="off" placeholder="profile-1">
+          </label>
+          <label>Profile name
+            <input id="profileName" autocomplete="off" placeholder="Main">
+          </label>
+        </div>
+        <label class="check">
+          <input id="enabled" type="checkbox">
+          <span>Auto-run queue</span>
+        </label>
+        <button id="saveSettings" class="primary wide-btn">Save settings</button>
+      </section>
+    </aside>
+
+    <div id="toast"></div>
+    <script src="manager.js"></script>
+  </body>
+</html>

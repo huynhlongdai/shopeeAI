@@ -1,0 +1,65 @@
+body {
+  background: #f7f8fb;
+  color: #152033;
+  font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  width: 300px;
+}
+
+header {
+  align-items: center;
+  background: #ee4d2d;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+main {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+button {
+  background: #255bd7;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  padding: 9px 10px;
+}
+
+button:first-child {
+  background: #172033;
+}
+
+.row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+#serverPill {
+  background: rgba(255,255,255,.18);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+#status {
+  color: #5b677a;
+  margin: 0;
+}
+
+#summary {
+  background: white;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.job-row {
+  display: flex;
+  justify-content: space-between;
+}

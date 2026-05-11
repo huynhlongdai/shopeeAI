@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>shopeeAI</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <header>
+      <strong>shopeeAI</strong>
+      <span id="serverPill">Checking</span>
+    </header>
+    <main>
+      <button id="manager">Open manager</button>
+      <button id="collect">Collect current tab</button>
+      <button id="poll">Run queue now</button>
+      <label class="row">
+        <input id="enabled" type="checkbox">
+        <span>Auto-run queue</span>
+      </label>
+      <p id="status">Ready.</p>
+      <section id="summary"></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

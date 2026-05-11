@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+
+# Local browser/session state
+.shopee-browser/
+**/.shopee-browser/
+
+# OS/editor noise
+.DS_Store
+*.log
+
+# Downloads/build artifacts
+shopee/
+dist/
+build/
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
