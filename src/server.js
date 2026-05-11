@@ -90,6 +90,35 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/shopee/product-id') {
+    assertAuthorized(req);
+    const url = requestUrl.searchParams.get('url') || requestUrl.searchParams.get('link') || '';
+    const resolve = truthyQuery(requestUrl.searchParams.get('resolve'));
+    const result = await getProductId(normalizeProductInfoInput({ url }), { resolve });
+    sendJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/product-id') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const result = await getProductId(normalizeProductInfoInput(body), { resolve: Boolean(body.resolve) });
+    sendJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/product-ids') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const inputs = normalizeProductIdBatchInput(body);
+    const products = [];
+    for (const input of inputs) {
+      products.push(await getProductId(input, { resolve: Boolean(body.resolve) }));
+    }
+    sendJson(res, 200, { ok: true, products, count: products.length });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/shopee/browser-product-data') {
     assertAuthorized(req);
     const body = await readJson(req);
@@ -575,6 +604,35 @@ async function getProductData(input) {
     itemId: ids.itemId,
     product: withoutRaw(product),
     reviews,
+  };
+}
+
+async function getProductId(input, options = {}) {
+  const direct = extractProductIds(input.url);
+  if (direct) {
+    return formatProductIdResult(input.url, direct, input.url, false);
+  }
+
+  if (!options.resolve) {
+    throw httpError(
+      400,
+      'Cannot detect Shopee shop_id/item_id from this URL. Retry with `resolve: true` for short or redirected links.',
+    );
+  }
+
+  const resolved = await resolveProductIds(input.url);
+  return formatProductIdResult(input.url, resolved, resolved.url, true);
+}
+
+function formatProductIdResult(inputUrl, ids, resolvedUrl, resolved) {
+  return {
+    inputUrl,
+    url: resolvedUrl || inputUrl,
+    shopId: String(ids.shopId),
+    itemId: String(ids.itemId),
+    productKey: `${ids.shopId}.${ids.itemId}`,
+    canonicalUrl: `https://shopee.vn/product/${ids.shopId}/${ids.itemId}`,
+    resolved: Boolean(resolved),
   };
 }
 
@@ -1189,6 +1247,21 @@ function normalizeProductInfoBatchInput(body) {
   return inputs;
 }
 
+function normalizeProductIdBatchInput(body) {
+  const links = Array.isArray(body.urls)
+    ? body.urls
+    : Array.isArray(body.links)
+      ? body.links
+      : body.url || body.link
+        ? [body.url || body.link]
+        : [];
+  const inputs = links.map((url) => normalizeProductInfoInput({ url }));
+  if (!inputs.length) {
+    throw httpError(400, '`url`, `link`, `urls`, or `links` is required.');
+  }
+  return inputs;
+}
+
 function normalizeProductLinksInput(body) {
   const keyword = String(body.keyword || body.query || '').trim();
   const url = String(body.url || '').trim();
@@ -1522,6 +1595,10 @@ function numberFromEnv(name, fallback) {
 function numberFromQuery(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function truthyQuery(value) {
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 function loadDotEnv(filePath) {
