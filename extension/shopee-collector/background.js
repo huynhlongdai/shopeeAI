@@ -10,6 +10,9 @@ const DEFAULT_SETTINGS = {
 
 const TAB_READY_TIMEOUT_MS = 30000;
 const COLLECT_TIMEOUT_MS = 25000;
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+let cachedAffiliateTabId;
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -196,21 +199,33 @@ async function runTypedJob(settings, job) {
   }
 
   if (job.type === 'affiliate-links') {
-    const affiliateTab = await openReadyTab(settings.affiliateUrl);
-    try {
+    const cached = await getAffiliateCache(job.input);
+    if (cached) {
       return {
         type: job.type,
-        affiliateLink: await collectAffiliateLinksFromTab(affiliateTab.id, job.input),
+        affiliateLink: cached,
+        cacheHit: true,
       };
-    } finally {
-      await closeTab(affiliateTab);
     }
+    const affiliateTab = await getAffiliateTab(settings);
+    const affiliateLink = await collectAffiliateLinksFromTab(affiliateTab.id, job.input);
+    await setAffiliateCache(job.input, affiliateLink);
+    return { type: job.type, affiliateLink };
   }
 
   if (job.type === 'product-affiliate') {
+    const cachedProduct = await getProductCacheByUrl(job.url);
+    if (cachedProduct) {
+      return {
+        type: job.type,
+        ...(await collectProductAffiliateForProduct(settings, cachedProduct, job.input)),
+        productCacheHit: true,
+      };
+    }
     const productTab = await openReadyTab(job.url);
     try {
       const productData = await collectFromTab(productTab.id);
+      await setProductCache(productData);
       return {
         type: job.type,
         ...(await collectProductAffiliateForProduct(settings, productData, job.input)),
@@ -222,7 +237,9 @@ async function runTypedJob(settings, job) {
 
   const productTab = await openReadyTab(job.url);
   try {
-    return await collectFromTab(productTab.id);
+    const productData = await collectFromTab(productTab.id);
+    await setProductCache(productData);
+    return productData;
   } finally {
     await closeTab(productTab);
   }
@@ -325,9 +342,12 @@ async function collectCurrentProductAffiliate() {
 
 async function collectProductByUrl(url) {
   if (!url) throw new Error('Product URL is required.');
+  const cached = await getProductCacheByUrl(url);
+  if (cached) return cached;
   const tab = await openReadyTab(url);
   try {
     const productData = await collectFromTab(tab.id);
+    await setProductCache(productData);
     await chrome.storage.local.set({ latestProductData: productData });
     await setStatus({ state: 'completed', message: 'Collected product from listing card.' });
     return productData;
@@ -354,27 +374,33 @@ async function collectProductAffiliateByUrl(url, input = {}) {
 
 async function collectProductAffiliateForProduct(settings, productData, input) {
   let offerTab;
-  let affiliateTab;
   try {
-    offerTab = productData.itemId
-      ? await openReadyTab(`https://affiliate.shopee.vn/offer/product_offer/${encodeURIComponent(productData.itemId)}`)
-      : undefined;
     const affiliateOffer = productData.itemId
-      ? await collectAffiliateOfferFromTab(offerTab.id, productData.itemId).catch((error) => ({
-          available: false,
-          error: error.message,
-        }))
+      ? await getOfferCache(productData.itemId) || await (async () => {
+          offerTab = await openReadyTab(`https://affiliate.shopee.vn/offer/product_offer/${encodeURIComponent(productData.itemId)}`);
+          const offer = await collectAffiliateOfferFromTab(offerTab.id, productData.itemId).catch((error) => ({
+            available: false,
+            error: error.message,
+          }));
+          await setOfferCache(productData.itemId, offer);
+          return offer;
+        })()
       : undefined;
-    affiliateTab = await openReadyTab(settings.affiliateUrl);
-    const affiliateLink = await collectAffiliateLinksFromTab(affiliateTab.id, input).catch((error) => ({
-      available: false,
-      error: error.message,
-    }));
 
-    return { productData, affiliateOffer, affiliateLink };
+    const cachedAffiliate = await getAffiliateCache(input);
+    const affiliateLink = cachedAffiliate || await (async () => {
+      const affiliateTab = await getAffiliateTab(settings);
+      const link = await collectAffiliateLinksFromTab(affiliateTab.id, input).catch((error) => ({
+        available: false,
+        error: error.message,
+      }));
+      if (link?.available !== false) await setAffiliateCache(input, link);
+      return link;
+    })();
+
+    return { productData, affiliateOffer, affiliateLink, cacheHit: Boolean(cachedAffiliate) };
   } finally {
     await closeTab(offerTab);
-    await closeTab(affiliateTab);
   }
 }
 
@@ -464,6 +490,86 @@ async function collectProductLinksFromTab(tabId, input) {
     throw new Error(response?.error || 'Could not collect product links.');
   }
   return response.result;
+}
+
+async function getAffiliateTab(settings) {
+  if (cachedAffiliateTabId) {
+    const existing = await chrome.tabs.get(cachedAffiliateTabId).catch(() => undefined);
+    if (existing?.id) return existing;
+    cachedAffiliateTabId = undefined;
+  }
+
+  const tabs = await chrome.tabs.query({ url: 'https://affiliate.shopee.vn/offer/custom_link*' });
+  const existing = tabs.find((tab) => tab.id);
+  if (existing?.id) {
+    cachedAffiliateTabId = existing.id;
+    await chrome.tabs.update(existing.id, { active: false }).catch(() => {});
+    await delay(700);
+    return existing;
+  }
+
+  const tab = await openReadyTab(settings.affiliateUrl);
+  cachedAffiliateTabId = tab.id;
+  return tab;
+}
+
+async function getProductCacheByUrl(url) {
+  const ids = extractProductIdsFromUrl(url);
+  if (!ids) return undefined;
+  return getCache(`cache.product.${ids.shopId}.${ids.itemId}`);
+}
+
+async function setProductCache(productData) {
+  if (!productData?.shopId || !productData?.itemId) return;
+  await setCache(`cache.product.${productData.shopId}.${productData.itemId}`, productData);
+}
+
+async function getOfferCache(itemId) {
+  if (!itemId) return undefined;
+  return getCache(`cache.offer.${itemId}`);
+}
+
+async function setOfferCache(itemId, offer) {
+  if (!itemId || !offer) return;
+  await setCache(`cache.offer.${itemId}`, offer);
+}
+
+async function getAffiliateCache(input) {
+  return getCache(`cache.affiliate.${affiliateCacheKey(input)}`);
+}
+
+async function setAffiliateCache(input, affiliateLink) {
+  if (!affiliateLink?.links?.length) return;
+  await setCache(`cache.affiliate.${affiliateCacheKey(input)}`, affiliateLink);
+}
+
+async function getCache(key) {
+  const row = (await chrome.storage.local.get(key))[key];
+  if (!row || Date.now() - Number(row.at || 0) > CACHE_TTL_MS) return undefined;
+  return row.value;
+}
+
+async function setCache(key, value) {
+  await chrome.storage.local.set({ [key]: { at: Date.now(), value } });
+}
+
+function affiliateCacheKey(input = {}) {
+  const links = Array.isArray(input.links) ? input.links : [];
+  const subIds = Array.isArray(input.subIds) ? input.subIds : [];
+  return encodeURIComponent(JSON.stringify({ links, subIds }));
+}
+
+function extractProductIdsFromUrl(url) {
+  const text = String(url || '');
+  const patterns = [
+    /(?:^|[/?&.-])i\.(\d+)\.(\d+)(?:[/?&#]|$)/i,
+    /\/product\/(\d+)\/(\d+)(?:[/?&#]|$)/i,
+  ];
+  for (const pattern of patterns) {
+    const row = text.match(pattern);
+    if (row) return { shopId: row[1], itemId: row[2] };
+  }
+  return undefined;
 }
 
 async function openReadyTab(url) {

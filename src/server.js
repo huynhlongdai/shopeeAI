@@ -174,6 +174,22 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/shopee/extension/affiliate-links/batch') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const input = normalizeAffiliateBatchInput(body);
+    const jobs = [];
+    for (const links of chunk(input.links, MAX_LINKS)) {
+      jobs.push(createExtensionJob({
+        type: 'affiliate-links',
+        input: { links, subIds: input.subIds },
+        targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+      }));
+    }
+    sendJson(res, 202, { ok: true, jobs, count: jobs.length });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/shopee/extension/product-affiliate') {
     assertAuthorized(req);
     const body = await readJson(req);
@@ -1124,6 +1140,36 @@ function normalizeInput(body) {
   }
 
   return { links, subIds };
+}
+
+function normalizeAffiliateBatchInput(body) {
+  const rawLinks = Array.isArray(body.links) ? body.links : body.link ? [body.link] : [];
+  const links = rawLinks.map((link) => String(link || '').trim()).filter(Boolean);
+
+  if (links.length === 0) {
+    throw httpError(400, '`link` or `links` is required.');
+  }
+
+  const subIds = SUB_ID_KEYS.map((key, index) => {
+    const value = body[key] ?? body.subIds?.[index] ?? '';
+    return String(value || '').trim();
+  });
+
+  for (const subId of subIds) {
+    if (subId && !/^[a-zA-Z0-9]{1,50}$/.test(subId)) {
+      throw httpError(400, 'Sub IDs must be alphanumeric and up to 50 characters.');
+    }
+  }
+
+  return { links, subIds };
+}
+
+function chunk(items, size) {
+  const rows = [];
+  for (let index = 0; index < items.length; index += size) {
+    rows.push(items.slice(index, index + size));
+  }
+  return rows;
 }
 
 function normalizeProductInfoInput(body) {

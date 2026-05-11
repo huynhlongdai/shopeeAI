@@ -123,11 +123,14 @@ async function createJob() {
     addSubIdsToBody(body, subIds);
   }
 
-  const response = await api('/api/shopee/extension/jobs', {
+  const endpoint = type === 'affiliate-links' && body.links?.length > 5
+    ? '/api/shopee/extension/affiliate-links/batch'
+    : '/api/shopee/extension/jobs';
+  const response = await api(endpoint, {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  toast(`Created job #${response.job.id}`);
+  toast(response.jobs ? `Created ${response.jobs.length} jobs.` : `Created job #${response.job.id}`);
   await refreshJobs();
 }
 
