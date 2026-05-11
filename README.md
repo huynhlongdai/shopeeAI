@@ -8,6 +8,8 @@ Agent hỗ trợ MCP có thể dùng `npm run mcp` sau khi API đã chạy. Xem 
 
 Tài liệu API đầy đủ nằm ở `API_DOCS.md`. Trong extension manager cũng có menu `API docs` để xem nhanh endpoint, body mẫu, và flow khuyến nghị.
 
+Ý tưởng mở rộng thành hệ thống analytics kiểu "Shopdora mini" được phân tích trong `SHOPEEAI_ANALYTICS_BLUEPRINT.md`.
+
 ## Cài đặt
 
 ```bash
