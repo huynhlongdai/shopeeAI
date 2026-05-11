@@ -12,6 +12,62 @@ let settings;
 let selectedJob;
 let allJobs = [];
 
+const API_DOC_SECTIONS = [
+  {
+    title: 'Basics',
+    text: 'Base URL defaults to http://127.0.0.1:8787. Send Authorization: Bearer <API_TOKEN> for every API except /health.',
+    endpoints: [
+      ['GET', '/health', 'Check whether the API server is alive.'],
+      ['GET', '/api/shopee/product-id?url=<product_url>', 'Parse shopId and itemId from one Shopee product URL. Add resolve=1 for short/redirect URLs.'],
+      ['POST', '/api/shopee/product-id', 'Body: {"url":"https://shopee.vn/...","resolve":false}.'],
+      ['POST', '/api/shopee/product-ids', 'Body: {"links":["https://shopee.vn/..."],"resolve":false}.'],
+    ],
+  },
+  {
+    title: 'Browser/Extension Jobs',
+    text: 'Recommended for Shopee pages because jobs run inside your real Chrome profile, cookies, and installed extension.',
+    endpoints: [
+      ['POST', '/api/shopee/extension/jobs', 'Create a queued job. Body type: product-info, product-affiliate, product-links, or affiliate-links.'],
+      ['GET', '/api/shopee/extension/jobs/created?limit=100&status=completed', 'List created jobs with optional status filter.'],
+      ['GET', '/api/shopee/extension/jobs/<id>', 'Read one job and its result.'],
+      ['POST', '/api/shopee/extension/jobs/<id>/retry', 'Retry a failed/cancelled/completed job.'],
+      ['POST', '/api/shopee/extension/jobs/<id>/cancel', 'Cancel a queued/running job.'],
+      ['POST', '/api/shopee/extension/jobs/clear', 'Body: {"status":"completed"} to clear jobs by status.'],
+    ],
+  },
+  {
+    title: 'Affiliate',
+    text: 'Shopee custom link UI supports 5 links per request. Use batch endpoint for larger lists.',
+    endpoints: [
+      ['POST', '/api/shopee/extension/affiliate-links', 'Queue affiliate conversion for up to 5 links. Supports subId1..subId5.'],
+      ['POST', '/api/shopee/extension/affiliate-links/batch', 'Queue unlimited links; server chunks into jobs of 5 links. Supports subId1..subId5.'],
+      ['POST', '/api/shopee/extension/product-affiliate', 'Collect product info, affiliate offer, and custom affiliate link for one product URL.'],
+      ['POST', '/api/shopee/affiliate-links', 'Legacy Playwright flow for up to 5 links. Prefer extension endpoint.'],
+      ['POST', '/api/shopee/product-affiliate', 'Legacy Playwright product info + affiliate link. Prefer extension endpoint.'],
+    ],
+  },
+  {
+    title: 'Product Data',
+    text: 'Product data includes name, description, price, sale price, sold count, shop, ratings, reviews, images, and videos when available.',
+    endpoints: [
+      ['POST', '/api/shopee/extension/product-info', 'Queue product info collection for one product URL.'],
+      ['POST', '/api/shopee/extension/product-links', 'Queue product link discovery from keyword, search URL, or category URL. Body supports limit and maxPages.'],
+      ['POST', '/api/shopee/product-info', 'Legacy direct product info.'],
+      ['POST', '/api/shopee/product-info/batch', 'Legacy direct batch product info.'],
+      ['POST', '/api/shopee/product-data', 'Legacy direct product info plus reviews.'],
+      ['GET', '/api/shopee/browser-product-data/latest', 'Read latest product payload posted by the extension.'],
+    ],
+  },
+  {
+    title: 'Profiles',
+    text: 'Use profiles when multiple Chrome sessions/extensions connect to one API server.',
+    endpoints: [
+      ['GET', '/api/shopee/extension/profiles', 'List extension profiles and heartbeat status.'],
+      ['POST', '/api/shopee/extension/profiles/heartbeat', 'Extension heartbeat endpoint. Usually called automatically.'],
+    ],
+  },
+];
+
 const els = {
   apiBase: document.querySelector('#apiBase'),
   apiToken: document.querySelector('#apiToken'),
@@ -39,6 +95,7 @@ const els = {
   resultSummary: document.querySelector('#resultSummary'),
   resultJson: document.querySelector('#resultJson'),
   toast: document.querySelector('#toast'),
+  apiDocsContent: document.querySelector('#apiDocsContent'),
 };
 
 init();
@@ -50,6 +107,11 @@ document.querySelector('#runQueue').addEventListener('click', () => chrome.runti
 document.querySelector('#openSettings').addEventListener('click', openSettings);
 document.querySelector('#closeSettings').addEventListener('click', closeSettings);
 document.querySelector('#closeSettingsButton').addEventListener('click', closeSettings);
+document.querySelector('#openApiDocs').addEventListener('click', openApiDocs);
+document.querySelector('#closeApiDocs').addEventListener('click', closeApiDocs);
+document.querySelector('#closeApiDocsButton').addEventListener('click', closeApiDocs);
+document.querySelector('#copyApiDocs').addEventListener('click', copyApiDocs);
+document.querySelector('#copyApiBase').addEventListener('click', copyApiBase);
 document.querySelector('#refreshJobs').addEventListener('click', refreshJobs);
 document.querySelector('#clearCompleted').addEventListener('click', () => clearJobs('completed'));
 document.querySelector('#copyResult').addEventListener('click', copyResult);
@@ -74,6 +136,7 @@ async function init() {
   });
   await checkServer();
   await refreshJobs();
+  renderApiDocs();
   setInterval(refreshJobs, 5000);
 }
 
@@ -306,6 +369,76 @@ function openSettings() {
 function closeSettings() {
   document.querySelector('#settingsDrawer').classList.remove('open');
   document.querySelector('#settingsDrawer').setAttribute('aria-hidden', 'true');
+}
+
+function openApiDocs() {
+  renderApiDocs();
+  document.querySelector('#apiDocsDrawer').classList.add('open');
+  document.querySelector('#apiDocsDrawer').setAttribute('aria-hidden', 'false');
+}
+
+function closeApiDocs() {
+  document.querySelector('#apiDocsDrawer').classList.remove('open');
+  document.querySelector('#apiDocsDrawer').setAttribute('aria-hidden', 'true');
+}
+
+function renderApiDocs() {
+  els.apiDocsContent.innerHTML = API_DOC_SECTIONS.map((section) => `
+    <section class="docs-section">
+      <h3>${escapeHtml(section.title)}</h3>
+      <p>${escapeHtml(section.text)}</p>
+      ${section.endpoints.map(([method, path, description]) => `
+        <article class="endpoint">
+          <div class="endpoint-head">
+            <span class="endpoint-method ${method.toLowerCase()}">${escapeHtml(method)}</span>
+            <strong class="endpoint-path">${escapeHtml(path)}</strong>
+            <button class="secondary" data-copy-endpoint="${escapeHtml(method)} ${escapeHtml(path)}">Copy</button>
+          </div>
+          <p>${escapeHtml(description)}</p>
+        </article>
+      `).join('')}
+    </section>
+  `).join('');
+
+  els.apiDocsContent.querySelectorAll('[data-copy-endpoint]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(`${settings.apiBase}${button.dataset.copyEndpoint.replace(/^(GET|POST)\s+/, '')}`);
+      toast('Copied endpoint URL.');
+    });
+  });
+}
+
+async function copyApiDocs() {
+  await navigator.clipboard.writeText(apiDocsMarkdown());
+  toast('Copied API docs.');
+}
+
+async function copyApiBase() {
+  await navigator.clipboard.writeText(settings.apiBase);
+  toast('Copied API base.');
+}
+
+function apiDocsMarkdown() {
+  return [
+    '# shopeeAI API Docs',
+    '',
+    `Base URL: \`${settings.apiBase}\``,
+    '',
+    'Authentication: `Authorization: Bearer <API_TOKEN>` for every API except `/health`.',
+    '',
+    ...API_DOC_SECTIONS.flatMap((section) => [
+      `## ${section.title}`,
+      '',
+      section.text,
+      '',
+      ...section.endpoints.flatMap(([method, path, description]) => [
+        `### ${method} ${path}`,
+        '',
+        description,
+        '',
+      ]),
+    ]),
+  ].join('\n');
 }
 
 function getProductFromJob(job) {

@@ -377,6 +377,74 @@ pre {
 
 .settings-drawer.open .drawer-panel { transform: translateX(0); }
 
+.docs-panel {
+  max-width: 760px;
+  width: min(760px, 96vw);
+}
+
+.docs-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.docs-content {
+  display: grid;
+  gap: 12px;
+}
+
+.docs-section {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.docs-section h3 {
+  font-size: 15px;
+}
+
+.endpoint {
+  background: var(--card-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+}
+
+.endpoint-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.endpoint-method {
+  background: #e9f7f1;
+  border-radius: 999px;
+  color: var(--green);
+  font-weight: 800;
+  padding: 3px 7px;
+}
+
+.endpoint-method.post { background: #eef3ff; color: var(--blue); }
+
+.endpoint-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.endpoint code {
+  background: #edf2f8;
+  border-radius: 5px;
+  display: block;
+  overflow-x: auto;
+  padding: 7px;
+  white-space: pre;
+}
+
 #toast {
   background: #172033;
   border-radius: 9px;
@@ -402,6 +470,10 @@ pre {
   }
   .stats, .subids, .grid-2, .grid-2-even, .summary-grid, .action-grid {
     grid-template-columns: 1fr;
+  }
+  .docs-actions, .endpoint-head {
+    align-items: stretch;
+    flex-direction: column;
   }
   .table-head { display: none; }
   .job {

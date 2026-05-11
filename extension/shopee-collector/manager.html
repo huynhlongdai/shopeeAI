@@ -19,6 +19,7 @@
         <span id="serverStatus" class="pill">Checking</span>
         <button id="checkServer" class="ghost">Check server</button>
         <button id="runQueue">Run queue</button>
+        <button id="openApiDocs" class="ghost">API docs</button>
         <button id="openSettings" class="ghost">Settings</button>
       </div>
     </header>
@@ -172,6 +173,24 @@
           <span>Auto-run queue</span>
         </label>
         <button id="saveSettings" class="primary wide-btn">Save settings</button>
+      </section>
+    </aside>
+
+    <aside id="apiDocsDrawer" class="settings-drawer" aria-hidden="true">
+      <div class="drawer-backdrop" id="closeApiDocs"></div>
+      <section class="drawer-panel docs-panel">
+        <div class="section-head">
+          <div>
+            <h2>API Docs</h2>
+            <p class="muted">Quick reference for local and extension endpoints.</p>
+          </div>
+          <button id="closeApiDocsButton" class="ghost">Close</button>
+        </div>
+        <div class="docs-actions">
+          <button id="copyApiDocs" class="secondary">Copy docs</button>
+          <button id="copyApiBase" class="secondary">Copy API base</button>
+        </div>
+        <div id="apiDocsContent" class="docs-content"></div>
       </section>
     </aside>
 
