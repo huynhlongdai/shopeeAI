@@ -39,6 +39,7 @@ const productCardCache = new Map();
 
 initShopeeCollectorPanel();
 initProductCardTools();
+initProductDetailTools();
 
 async function collectShopeeProduct() {
   const bodyText = document.body?.innerText || '';
@@ -945,9 +946,35 @@ function initShopeeCollectorPanel() {
     .slpc-card-tools button.slpc-good { background: rgba(31,138,91,.96); }
     .slpc-card-tools button.slpc-muted { background: rgba(51,65,85,.92); }
     .slpc-card-tools button:disabled { cursor: wait; opacity: .78; }
+    .slpc-detail-tools {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0 8px;
+      max-width: 100%;
+      position: relative;
+      z-index: 20;
+    }
+    .slpc-detail-tools button {
+      background: #ee4d2d;
+      border: 0;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+      font: 650 12px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 28px;
+      padding: 7px 10px;
+      white-space: nowrap;
+    }
+    .slpc-detail-tools button.slpc-good { background: #1f8a5b; }
+    .slpc-detail-tools button.slpc-muted { background: #334155; }
+    .slpc-detail-tools button:disabled { cursor: wait; opacity: .78; }
     @media (max-width: 760px) {
       #slpc-panel { bottom: 72px; right: 10px; width: min(300px, calc(100vw - 20px)); }
       .slpc-row { grid-template-columns: 1fr 1fr; }
+      .slpc-detail-tools { gap: 5px; }
+      .slpc-detail-tools button { font-size: 11px; min-height: 26px; padding: 6px 8px; }
     }
   `;
   document.documentElement.appendChild(style);
@@ -973,6 +1000,47 @@ function initShopeeCollectorPanel() {
   renderCollectorPanel();
   setInterval(renderCollectorPanel, 5000);
   setInterval(initProductCardTools, 2500);
+  setInterval(initProductDetailTools, 1500);
+}
+
+function initProductDetailTools() {
+  if (!/shopee\.vn/i.test(location.hostname)) return;
+
+  const ids = extractProductIds(location.href);
+  const existing = document.getElementById('slpc-detail-tools');
+  if (!ids?.itemId) {
+    existing?.remove();
+    return;
+  }
+
+  const key = `${ids.shopId}.${ids.itemId}`;
+  if (existing?.dataset.productKey === key) return;
+  existing?.remove();
+
+  const title = document.querySelector('h1');
+  if (!title) return;
+
+  const toolbar = document.createElement('div');
+  toolbar.id = 'slpc-detail-tools';
+  toolbar.className = 'slpc-detail-tools';
+  toolbar.dataset.productKey = key;
+  toolbar.innerHTML = `
+    <button class="slpc-muted" data-slpc-detail-action="copy-name" title="Copy product name">Tên</button>
+    <button class="slpc-muted" data-slpc-detail-action="copy-description" title="Copy product description">Mô tả</button>
+    <button class="slpc-muted" data-slpc-detail-action="copy-id" title="Copy shopId.itemId">ID</button>
+    <button class="slpc-muted" data-slpc-detail-action="copy-link" title="Copy canonical product link">Link</button>
+    <button data-slpc-detail-action="affiliate" title="Create affiliate link and copy it">Aff</button>
+    <button class="slpc-good" data-slpc-detail-action="images" title="Download all product images">Ảnh</button>
+    <button class="slpc-good" data-slpc-detail-action="videos" title="Download product videos">Video</button>
+  `;
+  toolbar.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-slpc-detail-action]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleProductDetailAction(button.dataset.slpcDetailAction, button);
+  });
+  title.insertAdjacentElement('afterend', toolbar);
 }
 
 function initProductCardTools() {
@@ -1094,6 +1162,88 @@ async function handleProductCardAction(action, item, button) {
       button.textContent = originalText;
     }, 1600);
   }
+}
+
+async function handleProductDetailAction(action, button) {
+  const originalText = button.textContent;
+  try {
+    button.disabled = true;
+    button.textContent = '...';
+
+    const ids = extractProductIds(location.href);
+    const productKey = ids ? `${ids.shopId}.${ids.itemId}` : '';
+    const canonicalUrl = ids ? `https://shopee.vn/product/${ids.shopId}/${ids.itemId}` : normalizeShopeeProductUrl(location.href);
+
+    if (action === 'copy-id') {
+      if (!productKey) throw new Error('Product ID not found.');
+      await navigator.clipboard.writeText(productKey);
+      button.textContent = 'OK';
+      return;
+    }
+
+    if (action === 'copy-link') {
+      await navigator.clipboard.writeText(canonicalUrl);
+      button.textContent = 'OK';
+      return;
+    }
+
+    if (action === 'copy-name') {
+      const name = normalizeText(document.querySelector('h1')?.textContent) || latestCollectedProduct?.name || titleName();
+      await navigator.clipboard.writeText(name);
+      button.textContent = 'OK';
+      return;
+    }
+
+    const product = await collectCurrentProductForDetail();
+
+    if (action === 'copy-description') {
+      await navigator.clipboard.writeText(product.description || '');
+      button.textContent = product.description ? 'OK' : 'Empty';
+      return;
+    }
+
+    if (action === 'affiliate') {
+      const response = await sendRuntimeMessage({ type: 'collect-current-product-affiliate' });
+      if (!response?.ok) throw new Error(response?.error || 'Affiliate failed.');
+      latestCollectedProduct = response.result.productData || product;
+      const shortLink = response.result.affiliateLink?.links?.[0]?.shortLink;
+      if (!shortLink) throw new Error(response.result.affiliateLink?.error || 'No affiliate link returned.');
+      await navigator.clipboard.writeText(shortLink);
+      button.textContent = 'Copied';
+      renderCollectorPanel();
+      return;
+    }
+
+    const urls = action === 'images'
+      ? product.images || []
+      : (product.videos || []).map((video) => video.url).filter(Boolean);
+    const items = mediaDownloadItems(urls, product.name, action === 'images' ? 'image' : 'video');
+    if (!items.length) throw new Error(action === 'images' ? 'No images found.' : 'No videos found.');
+    const response = await sendRuntimeMessage({ type: 'download-media', items });
+    if (!response?.ok) throw new Error(response?.error || 'Download failed.');
+    button.textContent = String(items.length);
+  } catch (error) {
+    button.textContent = 'Err';
+    console.warn('[shopeeAI]', error);
+  } finally {
+    setTimeout(() => {
+      button.disabled = false;
+      button.textContent = originalText;
+    }, 1600);
+  }
+}
+
+async function collectCurrentProductForDetail() {
+  const ids = extractProductIds(location.href);
+  const key = ids ? `${ids.shopId}.${ids.itemId}` : normalizeShopeeProductUrl(location.href);
+  if (latestCollectedProduct && latestCollectedProduct.itemId === ids?.itemId) {
+    return latestCollectedProduct;
+  }
+  if (productCardCache.has(key)) return productCardCache.get(key);
+  const product = await collectShopeeProduct();
+  productCardCache.set(key, product);
+  if (product.url) productCardCache.set(normalizeShopeeProductUrl(product.url), product);
+  return product;
 }
 
 async function collectProductFromCardUrl(item) {
