@@ -405,9 +405,41 @@ async function collectAffiliateLinksFromTab(tabId, input) {
     'Affiliate link collection timed out.',
   );
   if (!response?.ok) {
+    if (/Affiliate UI returned \d+ links for \d+ inputs/i.test(response?.error || '')) {
+      const fallback = await extractAffiliateLinksFromTab(tabId, input);
+      if (fallback.links.length) return fallback;
+    }
     throw new Error(response?.error || 'Could not collect affiliate links.');
   }
   return response.result;
+}
+
+async function extractAffiliateLinksFromTab(tabId, input) {
+  const links = Array.isArray(input?.links) ? input.links : [];
+  const expectedCount = Math.max(1, links.length);
+  const rows = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (count) => {
+      const textValues = [
+        ...[...document.querySelectorAll('textarea, input')].map((node) => node.value || node.textContent || ''),
+        document.body?.innerText || '',
+      ];
+      const values = [...new Set(textValues
+        .flatMap((value) => String(value).split(/\s+/))
+        .map((value) => value.trim().replace(/[),.;\]]+$/g, ''))
+        .filter((value) => /^https:\/\/s\.shopee\./i.test(value)))];
+      return values.slice(-count);
+    },
+    args: [expectedCount],
+  });
+  const shortLinks = rows?.[0]?.result || [];
+  return {
+    strategy: 'extension_ui_recovered',
+    links: shortLinks.map((shortLink, index) => ({
+      originalLink: links[index] || links[0],
+      shortLink,
+    })),
+  };
 }
 
 async function collectAffiliateOfferFromTab(tabId, itemId) {

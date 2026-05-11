@@ -233,9 +233,11 @@ async function collectAffiliateLinks(input) {
 async function collectAffiliateLinksViaUi(input) {
   const links = Array.isArray(input?.links) ? input.links : [];
   const subIds = Array.isArray(input?.subIds) ? input.subIds : [];
+  const beforeLinks = collectAffiliateShortLinksFromPage();
   const textarea = document.querySelector('textarea');
   if (!textarea) throw new Error('Custom Link textarea not found.');
 
+  clearAffiliateUiInputs();
   setNativeValue(textarea, links.join('\n'));
 
   const inputs = [...document.querySelectorAll('input')].filter((node) =>
@@ -249,10 +251,7 @@ async function collectAffiliateLinksViaUi(input) {
   if (!getLinkButton) throw new Error('Get Link button not found.');
   getLinkButton.click();
 
-  const shortLinks = await waitForAffiliateShortLinks(30000);
-  if (shortLinks.length !== links.length) {
-    throw new Error(`Affiliate UI returned ${shortLinks.length} links for ${links.length} inputs.`);
-  }
+  const shortLinks = await waitForAffiliateShortLinks(30000, beforeLinks, links.length);
 
   return {
     strategy: 'extension_ui',
@@ -263,20 +262,20 @@ async function collectAffiliateLinksViaUi(input) {
   };
 }
 
-function waitForAffiliateShortLinks(timeoutMs) {
+function waitForAffiliateShortLinks(timeoutMs, beforeLinks = [], expectedCount = 1) {
   const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     const timer = setInterval(() => {
-      const values = [...document.querySelectorAll('textarea, input')]
-        .map((node) => node.value || node.textContent || '')
-        .flatMap((value) => String(value).split(/\s+/))
-        .map((value) => value.trim())
-        .filter((value) => /^https:\/\/s\.shopee\./i.test(value));
+      const beforeSet = new Set(beforeLinks);
+      const allLinks = collectAffiliateShortLinksFromPage();
+      const freshLinks = allLinks.filter((link) => !beforeSet.has(link));
+      const selected = freshLinks.length >= expectedCount
+        ? freshLinks.slice(-expectedCount)
+        : allLinks.slice(-expectedCount);
 
-      const uniqueValues = unique(values);
-      if (uniqueValues.length) {
+      if (selected.length >= expectedCount) {
         clearInterval(timer);
-        resolve(uniqueValues);
+        resolve(selected);
         return;
       }
 
@@ -286,6 +285,25 @@ function waitForAffiliateShortLinks(timeoutMs) {
       }
     }, 500);
   });
+}
+
+function collectAffiliateShortLinksFromPage() {
+  const textValues = [
+    ...[...document.querySelectorAll('textarea, input')].map((node) => node.value || node.textContent || ''),
+    document.body?.innerText || '',
+  ];
+  return unique(
+    textValues
+      .flatMap((value) => String(value).split(/\s+/))
+      .map((value) => value.trim().replace(/[),.;\]]+$/g, ''))
+      .filter((value) => /^https:\/\/s\.shopee\./i.test(value)),
+  );
+}
+
+function clearAffiliateUiInputs() {
+  [...document.querySelectorAll('textarea, input')]
+    .filter((node) => /s\.shopee\.|shopee\.vn|Sub_id|Example|Please enter/i.test(`${node.value || ''} ${node.placeholder || ''}`))
+    .forEach((node) => setNativeValue(node, ''));
 }
 
 function setNativeValue(element, value) {
