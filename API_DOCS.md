@@ -340,6 +340,37 @@ Response:
     }
   ]
 }
+```
+
+### Future: POST /api/social/facebook/jobs
+
+Endpoint dự kiến cho extension Facebook Publisher. Tạo job đăng/draft bài Facebook từ Shopee affiliate link.
+
+```json
+{
+  "type": "facebook-publish-post",
+  "targetUrl": "https://www.facebook.com/Mienguyen.1203",
+  "affiliateLink": "https://s.shopee.vn/xxxxx",
+  "caption": "Tên sản phẩm\n\nLink mua: https://s.shopee.vn/xxxxx",
+  "media": ["https://down-vn.img.susercontent.com/file/..."],
+  "publishMode": "auto",
+  "schedule": {
+    "notBefore": "2026-05-12T09:00:00+07:00",
+    "cooldownMinutes": 45,
+    "jitterMinutes": 10
+  }
+}
+```
+
+`targetUrl` có thể lấy từ job, setting extension, hoặc setting server. `publishMode` dự kiến gồm `manual`, `draft`, `confirm`, `auto`.
+
+Auto publish phải đi kèm rate limit:
+
+- cooldown giữa các bài
+- khung giờ được phép đăng
+- giới hạn số bài/ngày
+- kiểm tra trùng affiliate link/caption
+- chuyển job sang `blocked_requires_user` nếu Facebook yêu cầu xác minh, CAPTCHA, checkpoint, hoặc login lại
 
 ## Legacy Playwright Endpoints
 

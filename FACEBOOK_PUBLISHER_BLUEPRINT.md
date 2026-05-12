@@ -151,7 +151,7 @@ Tạo job draft/publish bài Facebook.
 
 ```json
 {
-  "type": "facebook-draft-post",
+  "type": "facebook-publish-post",
   "targetUrl": "https://www.facebook.com/Mienguyen.1203",
   "productKey": "252432728.7449427978",
   "affiliateLink": "https://s.shopee.vn/xxxxx",
@@ -159,9 +159,35 @@ Tạo job draft/publish bài Facebook.
   "media": [
     "https://down-vn.img.susercontent.com/file/..."
   ],
-  "publishMode": "draft"
+  "publishMode": "auto",
+  "schedule": {
+    "notBefore": "2026-05-12T09:00:00+07:00",
+    "cooldownMinutes": 45,
+    "jitterMinutes": 10
+  }
 }
 ```
+
+`targetUrl` có thể lấy từ:
+
+1. body job
+2. setting extension
+3. setting server/env
+
+Thứ tự ưu tiên:
+
+```text
+job.targetUrl > extension.defaultTargetUrl > server.facebookDefaultTargetUrl
+```
+
+`publishMode` hỗ trợ:
+
+- `manual`: chỉ mở Facebook và copy caption/link.
+- `draft`: tạo draft, dừng trước nút đăng.
+- `confirm`: extension chuẩn bị bài, hỏi xác nhận rồi mới publish.
+- `auto`: tự publish nếu job hợp lệ và lịch/rate-limit cho phép.
+
+Với `auto`, hệ thống vẫn phải log lại đầy đủ nội dung, target, thời điểm, media, và post URL sau khi đăng.
 
 ### GET /api/social/facebook/jobs/next
 
@@ -232,6 +258,17 @@ social_posts (
 )
 ```
 
+Nên thêm các cột phục vụ lịch đăng:
+
+```sql
+alter table social_posts add column publish_mode text;
+alter table social_posts add column scheduled_at text;
+alter table social_posts add column not_before text;
+alter table social_posts add column target_url text;
+alter table social_posts add column cooldown_group text;
+alter table social_posts add column attempt_count integer default 0;
+```
+
 ### social_link_extractions
 
 ```sql
@@ -256,10 +293,17 @@ Popup/manager nên có:
 - API base/token
 - profile ID
 - default Facebook target URL
+- server-managed target URL fallback
 - publish mode:
   - `draft`: tạo bài, user tự bấm đăng
   - `confirm`: hỏi user trước khi extension bấm đăng
+  - `auto`: tự đăng theo lịch và giới hạn rate
   - `manual`: chỉ copy caption và mở page
+- posting interval:
+  - minimum cooldown minutes
+  - allowed posting hours
+  - max posts per day
+  - jitter minutes
 - job list
 - last published post
 - copy embed HTML
@@ -267,7 +311,7 @@ Popup/manager nên có:
 
 ## 8. Quy Tắc An Toàn
 
-Không nên để extension tự động bấm Publish không kiểm soát.
+Không nên để extension tự động bấm Publish không kiểm soát. Vì đăng bài là hành động công khai, cần thiết kế theo hướng chống spam, tuân thủ nền tảng, và giữ lịch đăng tự nhiên cho vận hành nội dung.
 
 Mặc định:
 
@@ -287,8 +331,120 @@ User tự kiểm tra và bấm Publish.
 Nếu muốn auto-publish:
 
 - phải có setting riêng
-- phải hiển thị confirm rõ ràng
+- phải có `targetUrl` rõ ràng
+- phải có lịch/cooldown rõ ràng
+- phải có giới hạn số bài/ngày
+- phải tránh đăng trùng caption/link liên tục
 - phải log lại nội dung đã đăng
+- phải lưu post URL sau khi đăng
+- nên có nút tạm dừng khẩn cấp
+
+Không thiết kế hệ thống để né, vượt, hoặc đánh lừa cơ chế phát hiện tự động của Facebook. Các thao tác như refresh/scroll/delay chỉ nên dùng để:
+
+- chờ UI ổn định
+- tránh spam request
+- giảm lỗi do trang chưa render xong
+- tuân thủ nhịp đăng nội dung đã cấu hình
+
+## 8.1 Posting Schedule & Rate Limit
+
+Server/extension nên có cấu hình:
+
+```json
+{
+  "facebookDefaultTargetUrl": "https://www.facebook.com/Mienguyen.1203",
+  "facebookPublishMode": "auto",
+  "facebookPosting": {
+    "minCooldownMinutes": 45,
+    "jitterMinutes": 10,
+    "maxPostsPerDay": 12,
+    "allowedHours": [
+      { "start": "08:00", "end": "11:30" },
+      { "start": "13:30", "end": "22:00" }
+    ],
+    "refreshBeforePost": true,
+    "scrollBeforeCompose": true
+  }
+}
+```
+
+Luật đề xuất:
+
+- Không đăng nếu chưa qua `minCooldownMinutes` từ bài trước cùng target.
+- Cộng/trừ `jitterMinutes` để lịch không dồn cục.
+- Không đăng ngoài `allowedHours`.
+- Không vượt `maxPostsPerDay`.
+- Nếu Facebook yêu cầu xác minh, CAPTCHA, checkpoint, hoặc login lại, job chuyển sang `blocked_requires_user`.
+- Nếu nội dung/media bị lỗi upload, job chuyển sang `failed` và không retry liên tục.
+
+Trạng thái job:
+
+```text
+queued
+waiting_schedule
+opening_target
+composing
+uploading_media
+ready_for_publish
+publishing
+published
+blocked_requires_user
+failed
+cancelled
+```
+
+## 8.2 Auto Publish Algorithm
+
+Pseudo:
+
+```text
+load settings
+resolve targetUrl
+check channel is enabled
+check current time in allowedHours
+check daily post count
+check last published at + cooldown + jitter
+open targetUrl
+refresh if configured
+scroll if configured
+open composer
+fill caption
+attach media
+verify preview contains affiliate link
+if publishMode == draft:
+  stop at composer
+if publishMode == confirm:
+  wait for user approval
+if publishMode == auto:
+  click Publish
+wait for post URL
+create embed
+store social_post result
+```
+
+## 8.3 Duplicate Control
+
+Trước khi đăng:
+
+- hash caption
+- hash affiliate link
+- kiểm tra sản phẩm đã đăng trong N giờ chưa
+- kiểm tra cùng `targetUrl` đã đăng link đó chưa
+
+Cấu hình:
+
+```json
+{
+  "duplicateWindowHours": 48,
+  "allowSameProductAfterHours": 72
+}
+```
+
+Nếu trùng:
+
+```text
+status = skipped_duplicate
+```
 
 ## 9. Template Caption
 
@@ -389,4 +545,3 @@ Frontend có thể render:
 - Persist `social_posts`.
 - Add dashboard in manager.
 - Add analytics by social channel.
-
