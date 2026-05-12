@@ -164,6 +164,12 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/social/facebook/profiles') {
+    assertAuthorized(req);
+    sendJson(res, 200, { ok: true, profiles: [...facebookProfiles.values()] });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/social/facebook/jobs/next') {
     assertAuthorized(req);
     const profileId = normalizeProfileId(requestUrl.searchParams.get('profileId'));
@@ -171,6 +177,7 @@ async function handleRequest(req, res) {
       upsertFacebookProfile({
         profileId,
         profileName: requestUrl.searchParams.get('profileName') || undefined,
+        extensionVersion: requestUrl.searchParams.get('extensionVersion') || undefined,
         state: 'polling',
       });
     }
@@ -222,6 +229,21 @@ async function handleRequest(req, res) {
     if (job.workerProfileId) {
       upsertFacebookProfile({ profileId: job.workerProfileId, state: 'completed', currentJobId: '' });
     }
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookRetryMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)\/retry$/);
+  if (req.method === 'POST' && facebookRetryMatch) {
+    assertAuthorized(req);
+    const job = findFacebookJob(facebookRetryMatch[1]);
+    job.status = 'queued';
+    delete job.result;
+    delete job.workerProfileId;
+    delete job.startedAt;
+    delete job.completedAt;
+    delete job.failedAt;
+    job.updatedAt = new Date().toISOString();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -624,6 +646,7 @@ function upsertExtensionProfile(body) {
     extensionVersion: normalizeText(body.extensionVersion) || previous.extensionVersion,
     userAgent: normalizeText(body.userAgent) || previous.userAgent,
     state: normalizeText(body.state) || previous.state || 'online',
+    extensionVersion: normalizeText(body.extensionVersion) || previous.extensionVersion || '',
     currentJobId: normalizeText(body.currentJobId) || '',
     firstSeenAt: previous.firstSeenAt || now,
     lastSeenAt: now,

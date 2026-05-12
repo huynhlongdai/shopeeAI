@@ -66,6 +66,7 @@ async function pollJobs() {
   const query = new URLSearchParams({
     profileId: settings.profileId,
     profileName: settings.profileName,
+    extensionVersion: chrome.runtime.getManifest().version,
   });
   const response = await apiFetch(settings, `/api/social/facebook/jobs/next?${query.toString()}`);
   if (!response.job) {
@@ -73,47 +74,49 @@ async function pollJobs() {
     return response;
   }
 
-    const job = applyLocalDefaults(response.job, settings);
-    await chrome.storage.local.set({ latestJob: job });
-    await setStatus({ state: 'running', message: `Preparing ${job.id}` });
-    try {
-      const tab = await openTargetTab(job.targetUrl);
-      const prepareResponse = await preparePostInTab(tab.id, job);
-      const publishResult = prepareResponse?.result || prepareResponse || {};
+  const job = applyLocalDefaults(response.job, settings);
+  await chrome.storage.local.set({ latestJob: job });
+  await setStatus({ state: 'running', message: `Preparing ${job.id}` });
+  try {
+    const tab = await openTargetTab(job.targetUrl);
+    const prepareResponse = await preparePostInTab(tab.id, job);
+    const publishResult = prepareResponse?.result || prepareResponse || {};
 
-      if (publishResult.published && publishResult.facebookPostUrl) {
-        const completeBody = {
-          profileId: settings.profileId,
-          status: 'published',
-          targetUrl: job.targetUrl,
-          publishMode: job.publishMode,
-          facebookPostUrl: publishResult.facebookPostUrl || '',
-          note: publishResult.note || 'Facebook post was published by the extension.',
-        };
-        await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/complete`, {
-          method: 'POST',
-          body: JSON.stringify(completeBody),
-        });
-        await setStatus({ state: 'published', message: `${job.id} published.` });
-        return { job, publishResult };
-      }
-
-      await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/ready`, {
+    if (publishResult.published && publishResult.facebookPostUrl) {
+      const completeBody = {
+        profileId: settings.profileId,
+        extensionVersion: chrome.runtime.getManifest().version,
+        status: 'published',
+        targetUrl: job.targetUrl,
+        publishMode: job.publishMode,
+        facebookPostUrl: publishResult.facebookPostUrl || '',
+        note: publishResult.note || 'Facebook post was published by the extension.',
+      };
+      await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/complete`, {
         method: 'POST',
-        body: JSON.stringify({
-          profileId: settings.profileId,
-          status: publishResult.status || 'ready_for_publish',
-          targetUrl: job.targetUrl,
-          publishMode: job.publishMode,
-          note: publishResult.note || 'Facebook post panel is ready. Review and publish from the browser.',
-        }),
+        body: JSON.stringify(completeBody),
       });
-      await setStatus({ state: 'ready', message: `${job.id} ready for publish.` });
+      await setStatus({ state: 'published', message: `${job.id} published.` });
       return { job, publishResult };
+    }
+
+    await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/ready`, {
+      method: 'POST',
+      body: JSON.stringify({
+        profileId: settings.profileId,
+        extensionVersion: chrome.runtime.getManifest().version,
+        status: publishResult.status || 'ready_for_publish',
+        targetUrl: job.targetUrl,
+        publishMode: job.publishMode,
+        note: publishResult.note || 'Facebook post panel is ready. Review and publish from the browser.',
+      }),
+    });
+    await setStatus({ state: 'ready', message: `${job.id} ready for publish.` });
+    return { job, publishResult };
   } catch (error) {
     await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/fail`, {
       method: 'POST',
-      body: JSON.stringify({ profileId: settings.profileId, error: error.message }),
+      body: JSON.stringify({ profileId: settings.profileId, extensionVersion: chrome.runtime.getManifest().version, error: error.message }),
     }).catch(() => {});
     await setStatus({ state: 'error', message: error.message });
     throw error;

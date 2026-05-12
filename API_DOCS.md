@@ -385,7 +385,11 @@ Query:
 
 ### GET /api/social/facebook/jobs/next
 
-Endpoint cho extension poll job tiếp theo. Query hỗ trợ `profileId` và `profileName`.
+Endpoint cho extension poll job tiếp theo. Query hỗ trợ `profileId`, `profileName`, và `extensionVersion`.
+
+### GET /api/social/facebook/profiles
+
+Liệt kê các Facebook Publisher profile đã poll server gần nhất, gồm trạng thái và `extensionVersion`.
 
 ### POST /api/social/facebook/jobs/:id/ready
 
@@ -398,6 +402,10 @@ Extension báo bài đã publish và gửi `facebookPostUrl`. Server tự tạo 
 ### POST /api/social/facebook/jobs/:id/fail
 
 Extension báo lỗi hoặc trạng thái cần user xử lý.
+
+### POST /api/social/facebook/jobs/:id/retry
+
+Đưa Facebook job về lại `queued` để retry sau khi reload extension hoặc đổi cấu hình.
 
 ## Legacy Playwright Endpoints
 
