@@ -66,6 +66,14 @@ const API_DOC_SECTIONS = [
       ['POST', '/api/shopee/extension/profiles/heartbeat', 'Extension heartbeat endpoint. Usually called automatically.'],
     ],
   },
+  {
+    title: 'Facebook Publisher',
+    text: 'Helpers for returning a Facebook Embedded Post after a Shopee affiliate link is posted on a validated Facebook channel.',
+    endpoints: [
+      ['POST', '/api/social/facebook/embed', 'Body: {"postUrl":"https://www.facebook.com/.../posts/...","width":500,"showText":true}.'],
+      ['POST', '/api/social/facebook/extract-shopee-links', 'Extract Shopee links from Facebook text, hrefs, or l.facebook.com redirect URLs.'],
+    ],
+  },
 ];
 
 const els = {

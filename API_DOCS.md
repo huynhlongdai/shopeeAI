@@ -287,6 +287,60 @@ Xem các Chrome profile/extension đang online.
 
 Heartbeat của extension. Thường không cần gọi thủ công.
 
+## Facebook Social Publisher
+
+### POST /api/social/facebook/embed
+
+Tạo Facebook Embedded Post URL/HTML từ một Facebook post URL công khai.
+
+```json
+{
+  "postUrl": "https://www.facebook.com/Mienguyen.1203/posts/...",
+  "width": 500,
+  "showText": true
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "postUrl": "https://www.facebook.com/Mienguyen.1203/posts/...",
+  "embedUrl": "https://www.facebook.com/plugins/post.php?href=...",
+  "embedHtml": "<iframe ...></iframe>"
+}
+```
+
+### POST /api/social/facebook/extract-shopee-links
+
+Tách link Shopee từ nội dung hoặc `href` trong bài Facebook. Endpoint này xử lý được cả redirect dạng `l.facebook.com/l.php?u=...`.
+
+```json
+{
+  "hrefs": [
+    "https://l.facebook.com/l.php?u=https%3A%2F%2Fs.shopee.vn%2Fabc%3Fcontent_source%3Dfb%26channel_type%3Dfb"
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "count": 1,
+  "links": [
+    {
+      "source": "facebook_redirect",
+      "shopeeLink": "https://s.shopee.vn/abc?content_source=fb&channel_type=fb",
+      "cleanShopeeLink": "https://s.shopee.vn/abc",
+      "channelType": "fb",
+      "contentSource": "fb"
+    }
+  ]
+}
+
 ## Legacy Playwright Endpoints
 
 Các endpoint này dùng browser Playwright local, có thể bị Shopee chặn/captcha hơn extension.
@@ -318,4 +372,3 @@ Lấy thông tin sản phẩm và affiliate link qua Playwright.
 3. Poll job bằng `/api/shopee/extension/jobs/<id>`.
 4. Lấy `result.productData`, `result.affiliateOffer`, `result.affiliateLink`.
 5. Với nhiều sản phẩm, dùng `/api/shopee/extension/product-links`, sau đó đưa link qua `/api/shopee/extension/affiliate-links/batch`.
-

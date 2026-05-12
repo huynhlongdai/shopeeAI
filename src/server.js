@@ -128,6 +128,22 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/social/facebook/embed') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const result = createFacebookPostEmbed(body);
+    sendJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/social/facebook/extract-shopee-links') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const links = extractShopeeLinksFromFacebookPayload(body);
+    sendJson(res, 200, { ok: true, links, count: links.length });
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/api/shopee/browser-product-data/latest') {
     assertAuthorized(req);
     sendJson(res, latestBrowserProductData ? 200 : 404, {
@@ -634,6 +650,105 @@ function formatProductIdResult(inputUrl, ids, resolvedUrl, resolved) {
     canonicalUrl: `https://shopee.vn/product/${ids.shopId}/${ids.itemId}`,
     resolved: Boolean(resolved),
   };
+}
+
+function createFacebookPostEmbed(body) {
+  const postUrl = String(body.postUrl || body.url || '').trim();
+  if (!postUrl) {
+    throw httpError(400, '`postUrl` or `url` is required.');
+  }
+
+  const parsed = safeUrl(postUrl);
+  if (!parsed || !/(^|\.)facebook\.com$/i.test(parsed.hostname)) {
+    throw httpError(400, '`postUrl` must be a facebook.com post URL.');
+  }
+
+  const width = Math.min(Math.max(numberFromQuery(body.width, 500), 320), 750);
+  const showText = body.showText === undefined ? true : Boolean(body.showText);
+  const embedUrl = new URL('https://www.facebook.com/plugins/post.php');
+  embedUrl.searchParams.set('href', postUrl);
+  embedUrl.searchParams.set('show_text', showText ? 'true' : 'false');
+  embedUrl.searchParams.set('width', String(width));
+
+  return {
+    postUrl,
+    embedUrl: embedUrl.toString(),
+    embedHtml: `<iframe src="${escapeAttribute(embedUrl.toString())}" width="${width}" height="640" style="border:none;overflow:hidden" scrolling="no" frameborder="0" allowfullscreen="true" allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"></iframe>`,
+  };
+}
+
+function extractShopeeLinksFromFacebookPayload(body) {
+  const candidates = [
+    body.text,
+    body.html,
+    body.href,
+    body.url,
+    ...(Array.isArray(body.hrefs) ? body.hrefs : []),
+    ...(Array.isArray(body.links) ? body.links : []),
+  ]
+    .flatMap((value) => String(value || '').split(/\s+/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const matches = [];
+  for (const candidate of candidates) {
+    for (const link of extractUrls(candidate)) {
+      const normalized = normalizeFacebookShopeeLink(link);
+      if (normalized) matches.push(normalized);
+    }
+  }
+
+  return dedupeBy(matches, (row) => row.cleanShopeeLink || row.shopeeLink);
+}
+
+function extractUrls(text) {
+  const urls = [];
+  const pattern = /https?:\/\/[^\s"'<>]+/gi;
+  for (const match of String(text || '').matchAll(pattern)) {
+    urls.push(match[0].replace(/[),.;]+$/g, ''));
+  }
+  return urls;
+}
+
+function normalizeFacebookShopeeLink(rawUrl) {
+  const parsed = safeUrl(rawUrl);
+  if (!parsed) return undefined;
+
+  let source = 'direct';
+  let shopeeLink = rawUrl;
+  if (/^l\.facebook\.com$/i.test(parsed.hostname) && parsed.pathname === '/l.php') {
+    const target = parsed.searchParams.get('u');
+    if (!target) return undefined;
+    shopeeLink = target;
+    source = 'facebook_redirect';
+  }
+
+  const targetUrl = safeUrl(shopeeLink);
+  if (!targetUrl || !/(^|\.)shopee\.vn$/i.test(targetUrl.hostname)) return undefined;
+  const cleanUrl = new URL(targetUrl.toString());
+  for (const key of [...cleanUrl.searchParams.keys()]) {
+    if (/^(content_source|fb_content_id|encrypted_payload|channel_type|content_type|fbclid)$/i.test(key)) {
+      cleanUrl.searchParams.delete(key);
+    }
+  }
+
+  return {
+    source,
+    shopeeLink: targetUrl.toString(),
+    cleanShopeeLink: cleanUrl.toString(),
+    channelType: targetUrl.searchParams.get('channel_type') || undefined,
+    contentSource: targetUrl.searchParams.get('content_source') || undefined,
+    contentType: targetUrl.searchParams.get('content_type') || undefined,
+    facebookContentId: targetUrl.searchParams.get('fb_content_id') || undefined,
+  };
+}
+
+function safeUrl(value) {
+  try {
+    return new URL(String(value || ''));
+  } catch {
+    return undefined;
+  }
 }
 
 async function getShopeePage() {
@@ -1599,6 +1714,26 @@ function numberFromQuery(value, fallback) {
 
 function truthyQuery(value) {
   return ['1', 'true', 'yes', 'y', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function dedupeBy(items, keyFn) {
+  const seen = new Set();
+  const rows = [];
+  for (const item of items) {
+    const key = keyFn(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push(item);
+  }
+  return rows;
+}
+
+function escapeAttribute(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 function loadDotEnv(filePath) {
