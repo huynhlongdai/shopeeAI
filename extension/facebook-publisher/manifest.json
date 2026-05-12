@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "shopeeAI Facebook Publisher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Publishes or prepares Facebook posts for Shopee affiliate links.",
   "permissions": ["alarms", "clipboardWrite", "scripting", "storage", "tabs"],
   "host_permissions": [

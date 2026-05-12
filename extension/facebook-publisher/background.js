@@ -78,19 +78,38 @@ async function pollJobs() {
     await setStatus({ state: 'running', message: `Preparing ${job.id}` });
     try {
       const tab = await openTargetTab(job.targetUrl);
-      await preparePostInTab(tab.id, job);
-    await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/ready`, {
-      method: 'POST',
-      body: JSON.stringify({
-        profileId: settings.profileId,
-        status: 'ready_for_publish',
-        targetUrl: job.targetUrl,
-        publishMode: job.publishMode,
-        note: 'Facebook post panel is ready. Review and publish from the browser.',
-      }),
-    });
-    await setStatus({ state: 'ready', message: `${job.id} ready for publish.` });
-    return { job };
+      const prepareResponse = await preparePostInTab(tab.id, job);
+      const publishResult = prepareResponse?.result || prepareResponse || {};
+
+      if (publishResult.published && publishResult.facebookPostUrl) {
+        const completeBody = {
+          profileId: settings.profileId,
+          status: 'published',
+          targetUrl: job.targetUrl,
+          publishMode: job.publishMode,
+          facebookPostUrl: publishResult.facebookPostUrl || '',
+          note: publishResult.note || 'Facebook post was published by the extension.',
+        };
+        await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/complete`, {
+          method: 'POST',
+          body: JSON.stringify(completeBody),
+        });
+        await setStatus({ state: 'published', message: `${job.id} published.` });
+        return { job, publishResult };
+      }
+
+      await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/ready`, {
+        method: 'POST',
+        body: JSON.stringify({
+          profileId: settings.profileId,
+          status: publishResult.status || 'ready_for_publish',
+          targetUrl: job.targetUrl,
+          publishMode: job.publishMode,
+          note: publishResult.note || 'Facebook post panel is ready. Review and publish from the browser.',
+        }),
+      });
+      await setStatus({ state: 'ready', message: `${job.id} ready for publish.` });
+      return { job, publishResult };
   } catch (error) {
     await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/fail`, {
       method: 'POST',

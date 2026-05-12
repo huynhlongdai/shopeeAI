@@ -200,7 +200,7 @@ async function handleRequest(req, res) {
     assertAuthorized(req);
     const job = findFacebookJob(facebookReadyMatch[1]);
     const body = await readJson(req);
-    job.status = 'ready_for_publish';
+    job.status = normalizeFacebookReadyStatus(body.status);
     job.result = { ...(job.result || {}), ...body };
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.updatedAt = new Date().toISOString();
@@ -820,6 +820,11 @@ function normalizeFacebookTargetUrl(value) {
 function normalizePublishMode(value) {
   const mode = String(value || '').trim().toLowerCase();
   return ['manual', 'draft', 'confirm', 'auto'].includes(mode) ? mode : 'draft';
+}
+
+function normalizeFacebookReadyStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  return ['ready_for_publish', 'published_pending_url'].includes(status) ? status : 'ready_for_publish';
 }
 
 function normalizeFacebookSchedule(value = {}) {

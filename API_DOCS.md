@@ -362,7 +362,9 @@ Tạo job đăng/draft bài Facebook từ Shopee affiliate link cho extension `f
 }
 ```
 
-`targetUrl` có thể lấy từ job, setting extension, hoặc setting server. `publishMode` dự kiến gồm `manual`, `draft`, `confirm`, `auto`.
+`targetUrl` có thể lấy từ job, setting extension, hoặc setting server. `publishMode` gồm `manual`, `draft`, `confirm`, `auto`.
+
+Khi `publishMode = auto`, extension Facebook Publisher sẽ mở target Facebook, tìm composer, điền caption/link, bấm Post, rồi cố gắng phát hiện URL bài vừa đăng. Nếu phát hiện được `facebookPostUrl`, job được chuyển sang `published` và server trả `result.embeddedPost`. Nếu Facebook đã nhận click đăng nhưng chưa expose URL bài viết, job chuyển sang `published_pending_url` để tránh trả nhầm embedded của bài cũ.
 
 Auto publish phải đi kèm rate limit:
 
@@ -387,7 +389,7 @@ Endpoint cho extension poll job tiếp theo. Query hỗ trợ `profileId` và `p
 
 ### POST /api/social/facebook/jobs/:id/ready
 
-Extension báo bài đã được chuẩn bị trên Facebook và sẵn sàng để user publish.
+Extension báo bài đã được chuẩn bị trên Facebook và sẵn sàng để user publish. Body có thể dùng `status = ready_for_publish` hoặc `published_pending_url`.
 
 ### POST /api/social/facebook/jobs/:id/complete
 
