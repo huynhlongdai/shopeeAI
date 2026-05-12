@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "shopeeAI Facebook Publisher",
+  "version": "0.1.0",
+  "description": "Publishes or prepares Facebook posts for Shopee affiliate links.",
+  "permissions": ["alarms", "clipboardWrite", "scripting", "storage", "tabs"],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "http://127.0.0.1:8787/*",
+    "http://localhost:8787/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Facebook Publisher"
+  }
+}

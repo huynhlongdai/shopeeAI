@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Facebook Publisher</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <h1>Facebook Publisher</h1>
+    <p id="status">Loading...</p>
+    <label>API base <input id="apiBase"></label>
+    <label>API token <input id="apiToken"></label>
+    <label>Profile ID <input id="profileId"></label>
+    <label>Profile name <input id="profileName"></label>
+    <label>Default target URL <input id="defaultTargetUrl" placeholder="https://www.facebook.com/page"></label>
+    <label>Publish mode
+      <select id="publishMode">
+        <option value="draft">Draft</option>
+        <option value="confirm">Confirm</option>
+        <option value="auto">Auto</option>
+        <option value="manual">Manual</option>
+      </select>
+    </label>
+    <label class="check"><input id="enabled" type="checkbox"> Auto-run queue</label>
+    <div class="actions">
+      <button id="save">Save</button>
+      <button id="poll">Poll now</button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

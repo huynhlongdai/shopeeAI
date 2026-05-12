@@ -31,6 +31,9 @@ let latestBrowserProductData;
 let extensionJobs = [];
 let extensionJobCounter = 0;
 let extensionProfiles = new Map();
+let facebookJobs = [];
+let facebookJobCounter = 0;
+let facebookProfiles = new Map();
 
 if (process.argv.includes('--login')) {
   await login();
@@ -141,6 +144,106 @@ async function handleRequest(req, res) {
     const body = await readJson(req);
     const links = extractShopeeLinksFromFacebookPayload(body);
     sendJson(res, 200, { ok: true, links, count: links.length });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/social/facebook/jobs') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const job = createFacebookJobFromBody(body);
+    sendJson(res, 202, { ok: true, job });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/social/facebook/jobs') {
+    assertAuthorized(req);
+    const limit = Math.min(numberFromQuery(requestUrl.searchParams.get('limit'), 50), 200);
+    const status = String(requestUrl.searchParams.get('status') || '').trim();
+    const jobs = status ? facebookJobs.filter((job) => job.status === status) : facebookJobs;
+    sendJson(res, 200, { ok: true, jobs: jobs.slice(-limit).reverse(), total: jobs.length });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/social/facebook/jobs/next') {
+    assertAuthorized(req);
+    const profileId = normalizeProfileId(requestUrl.searchParams.get('profileId'));
+    if (profileId) {
+      upsertFacebookProfile({
+        profileId,
+        profileName: requestUrl.searchParams.get('profileName') || undefined,
+        state: 'polling',
+      });
+    }
+    const now = Date.now();
+    const job = facebookJobs.find((row) =>
+      row.status === 'queued'
+        && facebookJobMatchesProfile(row, profileId)
+        && facebookJobIsSchedulable(row, now),
+    );
+    if (!job) {
+      sendJson(res, 200, { ok: true, job: null });
+      return;
+    }
+    job.status = 'running';
+    job.workerProfileId = profileId || 'facebook-default';
+    job.startedAt = new Date().toISOString();
+    job.updatedAt = job.startedAt;
+    if (profileId) {
+      upsertFacebookProfile({ profileId, state: 'running', currentJobId: job.id });
+    }
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookReadyMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)\/ready$/);
+  if (req.method === 'POST' && facebookReadyMatch) {
+    assertAuthorized(req);
+    const job = findFacebookJob(facebookReadyMatch[1]);
+    const body = await readJson(req);
+    job.status = 'ready_for_publish';
+    job.result = { ...(job.result || {}), ...body };
+    job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
+    job.updatedAt = new Date().toISOString();
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookCompleteMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)\/complete$/);
+  if (req.method === 'POST' && facebookCompleteMatch) {
+    assertAuthorized(req);
+    const job = findFacebookJob(facebookCompleteMatch[1]);
+    const body = await readJson(req);
+    const embeddedPost = body.facebookPostUrl ? createFacebookPostEmbed({ postUrl: body.facebookPostUrl }) : undefined;
+    job.status = 'published';
+    job.result = { ...body, embeddedPost };
+    job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
+    job.completedAt = new Date().toISOString();
+    job.updatedAt = job.completedAt;
+    if (job.workerProfileId) {
+      upsertFacebookProfile({ profileId: job.workerProfileId, state: 'completed', currentJobId: '' });
+    }
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookFailMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)\/fail$/);
+  if (req.method === 'POST' && facebookFailMatch) {
+    assertAuthorized(req);
+    const job = findFacebookJob(facebookFailMatch[1]);
+    const body = await readJson(req);
+    job.status = String(body.status || 'failed');
+    job.error = String(body.error || 'Facebook publisher job failed.');
+    job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
+    job.failedAt = new Date().toISOString();
+    job.updatedAt = job.failedAt;
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookJobMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)$/);
+  if (req.method === 'GET' && facebookJobMatch) {
+    assertAuthorized(req);
+    sendJson(res, 200, { ok: true, job: findFacebookJob(facebookJobMatch[1]) });
     return;
   }
 
@@ -675,6 +778,103 @@ function createFacebookPostEmbed(body) {
     embedUrl: embedUrl.toString(),
     embedHtml: `<iframe src="${escapeAttribute(embedUrl.toString())}" width="${width}" height="640" style="border:none;overflow:hidden" scrolling="no" frameborder="0" allowfullscreen="true" allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"></iframe>`,
   };
+}
+
+function createFacebookJobFromBody(body) {
+  const now = new Date().toISOString();
+  const targetUrl = normalizeFacebookTargetUrl(body.targetUrl || process.env.FACEBOOK_DEFAULT_TARGET_URL);
+  const affiliateLink = String(body.affiliateLink || body.link || '').trim();
+  const caption = String(body.caption || '').trim();
+  if (!targetUrl) throw httpError(400, '`targetUrl` is required.');
+  if (!affiliateLink) throw httpError(400, '`affiliateLink` is required.');
+  if (!caption) throw httpError(400, '`caption` is required.');
+
+  const publishMode = normalizePublishMode(body.publishMode || process.env.FACEBOOK_PUBLISH_MODE || 'draft');
+  const schedule = normalizeFacebookSchedule(body.schedule || body);
+  const job = {
+    id: `fb-${++facebookJobCounter}`,
+    type: String(body.type || 'facebook-publish-post'),
+    status: 'queued',
+    targetUrl,
+    affiliateLink,
+    caption,
+    media: Array.isArray(body.media) ? body.media.map(String).filter(Boolean) : [],
+    productKey: normalizeText(body.productKey),
+    publishMode,
+    schedule,
+    targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+    createdAt: now,
+    updatedAt: now,
+  };
+  facebookJobs.push(job);
+  return job;
+}
+
+function normalizeFacebookTargetUrl(value) {
+  const url = String(value || '').trim();
+  const parsed = safeUrl(url);
+  if (!parsed || !/(^|\.)facebook\.com$/i.test(parsed.hostname)) return '';
+  return parsed.toString();
+}
+
+function normalizePublishMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return ['manual', 'draft', 'confirm', 'auto'].includes(mode) ? mode : 'draft';
+}
+
+function normalizeFacebookSchedule(value = {}) {
+  const cooldownMinutes = Math.min(numberFromQuery(value.cooldownMinutes, numberFromEnv('FACEBOOK_MIN_COOLDOWN_MINUTES', 45)), 1440);
+  const jitterMinutes = Math.min(numberFromQuery(value.jitterMinutes, numberFromEnv('FACEBOOK_JITTER_MINUTES', 10)), 240);
+  return {
+    notBefore: normalizeText(value.notBefore),
+    cooldownMinutes,
+    jitterMinutes,
+    maxPostsPerDay: Math.min(numberFromQuery(value.maxPostsPerDay, numberFromEnv('FACEBOOK_MAX_POSTS_PER_DAY', 12)), 100),
+  };
+}
+
+function facebookJobMatchesProfile(job, profileId) {
+  return !job.targetProfileId || !profileId || job.targetProfileId === profileId;
+}
+
+function facebookJobIsSchedulable(job, now) {
+  const notBefore = Date.parse(job.schedule?.notBefore || '');
+  if (Number.isFinite(notBefore) && now < notBefore) return false;
+
+  const cooldownMs = (job.schedule?.cooldownMinutes || 0) * 60 * 1000;
+  if (!cooldownMs) return true;
+
+  const latestPublished = facebookJobs
+    .filter((row) => row.status === 'published' && row.targetUrl === job.targetUrl && row.completedAt)
+    .map((row) => Date.parse(row.completedAt))
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+  return !latestPublished || now - latestPublished >= cooldownMs;
+}
+
+function findFacebookJob(id) {
+  const job = facebookJobs.find((row) => row.id === id);
+  if (!job) throw httpError(404, 'Facebook job not found.');
+  return job;
+}
+
+function upsertFacebookProfile(body) {
+  const profileId = normalizeProfileId(body.profileId || body.id);
+  if (!profileId) throw httpError(400, '`profileId` is required.');
+  const previous = facebookProfiles.get(profileId) || {};
+  const now = new Date().toISOString();
+  const profile = {
+    ...previous,
+    id: profileId,
+    profileId,
+    profileName: normalizeText(body.profileName || body.name) || previous.profileName || profileId,
+    state: normalizeText(body.state) || previous.state || 'online',
+    currentJobId: normalizeText(body.currentJobId) || '',
+    firstSeenAt: previous.firstSeenAt || now,
+    lastSeenAt: now,
+  };
+  facebookProfiles.set(profileId, profile);
+  return profile;
 }
 
 function extractShopeeLinksFromFacebookPayload(body) {

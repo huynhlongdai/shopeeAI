@@ -6,6 +6,10 @@ const DEFAULT_SETTINGS = {
   subIds: ['n8n', '', '', '', ''],
   profileId: 'profile-1',
   profileName: 'Profile 1',
+  facebookTargetUrl: '',
+  facebookPublishMode: 'draft',
+  facebookCooldownMinutes: 45,
+  facebookCaption: '{name}\\n\\nGiá: {salePrice}\\nĐã bán: {sold}\\nLink mua: {affiliateLink}',
 };
 
 let settings;
@@ -72,6 +76,8 @@ const API_DOC_SECTIONS = [
     endpoints: [
       ['POST', '/api/social/facebook/embed', 'Body: {"postUrl":"https://www.facebook.com/.../posts/...","width":500,"showText":true}.'],
       ['POST', '/api/social/facebook/extract-shopee-links', 'Extract Shopee links from Facebook text, hrefs, or l.facebook.com redirect URLs.'],
+      ['POST', '/api/social/facebook/jobs', 'Create a Facebook Publisher job. Body includes targetUrl, affiliateLink, caption, publishMode, and schedule.'],
+      ['GET', '/api/social/facebook/jobs?limit=50', 'List Facebook Publisher jobs.'],
     ],
   },
 ];
@@ -80,6 +86,7 @@ const els = {
   apiBase: document.querySelector('#apiBase'),
   apiToken: document.querySelector('#apiToken'),
   affiliateUrl: document.querySelector('#affiliateUrl'),
+  settingsFacebookTargetUrl: document.querySelector('#settingsFacebookTargetUrl'),
   profileId: document.querySelector('#profileId'),
   profileName: document.querySelector('#profileName'),
   enabled: document.querySelector('#enabled'),
@@ -94,6 +101,10 @@ const els = {
   subId3: document.querySelector('#subId3'),
   subId4: document.querySelector('#subId4'),
   subId5: document.querySelector('#subId5'),
+  facebookTargetUrl: document.querySelector('#facebookTargetUrl'),
+  facebookPublishMode: document.querySelector('#facebookPublishMode'),
+  facebookCooldownMinutes: document.querySelector('#facebookCooldownMinutes'),
+  facebookCaption: document.querySelector('#facebookCaption'),
   filterStatus: document.querySelector('#filterStatus'),
   statQueued: document.querySelector('#statQueued'),
   statRunning: document.querySelector('#statRunning'),
@@ -129,6 +140,7 @@ document.querySelector('#copyProductLink').addEventListener('click', copyProduct
 document.querySelector('#copyAffiliateLink').addEventListener('click', copyAffiliateLink);
 document.querySelector('#downloadImages').addEventListener('click', () => downloadMedia('images'));
 document.querySelector('#downloadVideos').addEventListener('click', () => downloadMedia('videos'));
+document.querySelector('#createFacebookJob').addEventListener('click', createFacebookJobFromSelected);
 els.filterStatus.addEventListener('change', () => renderJobs(allJobs));
 
 async function init() {
@@ -136,6 +148,11 @@ async function init() {
   els.apiBase.value = settings.apiBase;
   els.apiToken.value = settings.apiToken;
   els.affiliateUrl.value = settings.affiliateUrl;
+  els.settingsFacebookTargetUrl.value = settings.facebookTargetUrl || '';
+  els.facebookTargetUrl.value = settings.facebookTargetUrl || '';
+  els.facebookPublishMode.value = settings.facebookPublishMode || DEFAULT_SETTINGS.facebookPublishMode;
+  els.facebookCooldownMinutes.value = settings.facebookCooldownMinutes || DEFAULT_SETTINGS.facebookCooldownMinutes;
+  els.facebookCaption.value = settings.facebookCaption || DEFAULT_SETTINGS.facebookCaption;
   els.profileId.value = settings.profileId || DEFAULT_SETTINGS.profileId;
   els.profileName.value = settings.profileName || DEFAULT_SETTINGS.profileName;
   els.enabled.checked = Boolean(settings.enabled);
@@ -153,6 +170,10 @@ async function saveSettings() {
     apiBase: els.apiBase.value.trim() || DEFAULT_SETTINGS.apiBase,
     apiToken: els.apiToken.value.trim() || DEFAULT_SETTINGS.apiToken,
     affiliateUrl: els.affiliateUrl.value.trim() || DEFAULT_SETTINGS.affiliateUrl,
+    facebookTargetUrl: els.settingsFacebookTargetUrl.value.trim() || els.facebookTargetUrl.value.trim(),
+    facebookPublishMode: els.facebookPublishMode.value || DEFAULT_SETTINGS.facebookPublishMode,
+    facebookCooldownMinutes: Number(els.facebookCooldownMinutes.value) || DEFAULT_SETTINGS.facebookCooldownMinutes,
+    facebookCaption: els.facebookCaption.value || DEFAULT_SETTINGS.facebookCaption,
     profileId: normalizeProfileId(els.profileId.value) || DEFAULT_SETTINGS.profileId,
     profileName: els.profileName.value.trim() || els.profileId.value.trim() || DEFAULT_SETTINGS.profileName,
     enabled: els.enabled.checked,
@@ -183,6 +204,15 @@ async function createJob() {
   const targetProfileId = normalizeProfileId(els.targetProfileId.value);
   if (targetProfileId) body.targetProfileId = targetProfileId;
 
+  if (type === 'facebook-post') {
+    const response = await createFacebookJob({
+      affiliateLink: url,
+      caption: renderCaptionTemplate({}, url),
+    });
+    toast(`Created Facebook job #${response.job.id}`);
+    return;
+  }
+
   if (type === 'product-links') {
     if (url) body.url = url;
     if (keyword) body.keyword = keyword;
@@ -203,6 +233,55 @@ async function createJob() {
   });
   toast(response.jobs ? `Created ${response.jobs.length} jobs.` : `Created job #${response.job.id}`);
   await refreshJobs();
+}
+
+async function createFacebookJobFromSelected() {
+  if (!selectedJob) return toast('Select a product-affiliate job first.');
+  const product = getProductFromJob(selectedJob);
+  const affiliateLink = getAffiliateLinkFromJob(selectedJob);
+  if (!affiliateLink) return toast('No affiliate link found.');
+  const response = await createFacebookJob({
+    affiliateLink,
+    caption: renderCaptionTemplate(product, affiliateLink),
+    productKey: product?.shopId && product?.itemId ? `${product.shopId}.${product.itemId}` : '',
+    media: getProductImages(product).slice(0, 4),
+  });
+  toast(`Created Facebook job #${response.job.id}`);
+}
+
+async function createFacebookJob({ affiliateLink, caption, productKey = '', media = [] }) {
+  const targetUrl = els.facebookTargetUrl.value.trim() || settings.facebookTargetUrl;
+  if (!targetUrl) throw new Error('Facebook target URL is required.');
+  if (!affiliateLink) throw new Error('Affiliate link is required.');
+  return api('/api/social/facebook/jobs', {
+    method: 'POST',
+    body: JSON.stringify({
+      targetUrl,
+      affiliateLink,
+      caption,
+      media,
+      productKey,
+      publishMode: els.facebookPublishMode.value || settings.facebookPublishMode || 'draft',
+      schedule: {
+        cooldownMinutes: Number(els.facebookCooldownMinutes.value) || settings.facebookCooldownMinutes || 45,
+      },
+    }),
+  });
+}
+
+function renderCaptionTemplate(product, affiliateLink) {
+  const template = els.facebookCaption.value || DEFAULT_SETTINGS.facebookCaption;
+  return template
+    .replaceAll('{name}', product?.name || '')
+    .replaceAll('{description}', product?.description || '')
+    .replaceAll('{salePrice}', product?.salePrice || product?.price || '')
+    .replaceAll('{originalPrice}', product?.originalPrice || '')
+    .replaceAll('{discount}', product?.discount || '')
+    .replaceAll('{sold}', product?.sold || product?.soldValue || '')
+    .replaceAll('{rating}', product?.rating || '')
+    .replaceAll('{shopName}', product?.shop?.name || '')
+    .replaceAll('{affiliateLink}', affiliateLink || '')
+    .replaceAll('{productKey}', product?.shopId && product?.itemId ? `${product.shopId}.${product.itemId}` : '');
 }
 
 async function refreshJobs() {
@@ -351,10 +430,17 @@ async function copyDescription() {
 }
 
 async function copyAffiliateLink() {
-  const link = selectedJob?.result?.affiliateLink?.links?.[0]?.shortLink;
+  const link = getAffiliateLinkFromJob(selectedJob);
   if (!link) return toast('No affiliate link found.');
   await navigator.clipboard.writeText(link);
   toast('Copied affiliate link.');
+}
+
+function getAffiliateLinkFromJob(job) {
+  return job?.result?.affiliateLink?.links?.[0]?.shortLink
+    || job?.result?.affiliateLink?.shortLink
+    || job?.result?.links?.[0]?.shortLink
+    || '';
 }
 
 async function downloadMedia(kind) {

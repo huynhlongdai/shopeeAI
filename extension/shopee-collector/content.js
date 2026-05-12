@@ -59,7 +59,7 @@ async function collectShopeeProduct() {
     title: document.title,
     shopId: ids?.shopId,
     itemId: ids?.itemId,
-    name: apiProduct?.name || getCurrentProductTitle() || titleName(),
+    name: cleanProductName(apiProduct?.name || getCurrentProductTitle() || titleName()),
     description: apiProduct?.description || extractDescription(bodyText),
     salePrice: apiProduct?.salePrice ?? salePrice,
     originalPrice: apiProduct?.originalPrice ?? originalPrice,
@@ -105,7 +105,7 @@ async function fetchShopeeProductApi(ids) {
   const ratingCounts = Array.isArray(item.item_rating?.rating_count) ? item.item_rating.rating_count : [];
 
   return compactObject({
-    name: item.title || item.name,
+    name: cleanProductName(item.title || item.name),
     description: item.description,
     salePrice,
     originalPrice,
@@ -729,8 +729,9 @@ function normalizeShopeeImages(images) {
 
 function normalizeShopeeVideoUrl(value) {
   if (!value) return undefined;
-  if (/^https?:\/\//i.test(value)) return value;
-  if (typeof value === 'string') return `https://cvf.shopee.vn/file/${value}`;
+  const text = String(value);
+  if (/^https?:\/\//i.test(text)) return text;
+  if (text) return `https://cvf.shopee.vn/file/${text}`;
   return undefined;
 }
 
@@ -738,18 +739,66 @@ function normalizeShopeeVideos(videos) {
   if (!videos) return [];
   const rows = Array.isArray(videos) ? videos : [videos];
   return uniqueShopeeVideos(rows
-    .map((video) => {
-      if (typeof video === 'string') return { url: normalizeShopeeVideoUrl(video) };
-      const url = firstDefined(video.default_format?.url, video.video_url, video.url, video.video_id, video.videoid);
-      const thumbnail = firstDefined(video.thumbnail, video.thumb_url, video.cover, video.default_format?.thumbnail);
-      return compactObject({
-        id: firstDefined(video.video_id, video.videoid, video.id),
-        url: normalizeShopeeVideoUrl(url),
-        thumbnail: normalizeShopeeImage(thumbnail),
-        duration: firstNumber(video.duration, video.default_format?.duration),
-      });
-    })
+    .flatMap(normalizeShopeeVideoCandidate)
     .filter((video) => video.url || video.id));
+}
+
+function normalizeShopeeVideoCandidate(video) {
+  if (!video) return [];
+  if (typeof video === 'string') return [{ url: normalizeShopeeVideoUrl(video) }].filter((row) => row.url);
+  if (typeof video !== 'object') return [];
+
+  const thumbnail = firstDefined(
+    video.thumbnail,
+    video.thumb_url,
+    video.cover,
+    video.cover_url,
+    video.default_format?.thumbnail,
+    video.default_format?.cover,
+  );
+  const id = firstDefined(video.video_id, video.videoid, video.id);
+  const duration = firstNumber(video.duration, video.default_format?.duration);
+  const directUrls = unique([
+    video.default_format?.url,
+    video.default_format?.play_url,
+    video.default_format?.download_url,
+    video.default_format?.transcoded_url,
+    video.default_format?.defn_video_url,
+    video.video_url,
+    video.play_url,
+    video.download_url,
+    video.transcoded_url,
+    video.defn_video_url,
+    video.url,
+    video.src,
+    video.video_id,
+    video.videoid,
+  ].filter(Boolean));
+
+  const nestedRows = [
+    video.formats,
+    video.format,
+    video.default_format,
+    video.video_url_list,
+    video.url_list,
+    video.urls,
+    video.sources,
+  ].flatMap((value) => normalizeShopeeVideos(value));
+
+  const rows = directUrls.map((url) =>
+    compactObject({
+      id,
+      url: normalizeShopeeVideoUrl(url),
+      thumbnail: normalizeShopeeImage(thumbnail),
+      duration,
+    }),
+  );
+
+  if (!rows.length && id) {
+    rows.push(compactObject({ id, url: normalizeShopeeVideoUrl(id), thumbnail: normalizeShopeeImage(thumbnail), duration }));
+  }
+
+  return [...rows, ...nestedRows];
 }
 
 function uniqueShopeeVideos(videos) {
@@ -1261,7 +1310,7 @@ async function handleProductDetailAction(action, button) {
     }
 
     if (action === 'copy-name') {
-      const name = getCurrentProductTitle() || latestCollectedProduct?.name || titleName();
+      const name = cleanProductName(getCurrentProductTitle() || latestCollectedProduct?.name || titleName());
       await navigator.clipboard.writeText(name);
       button.textContent = 'OK';
       return;
@@ -1308,9 +1357,16 @@ async function handleProductDetailAction(action, button) {
 
 function getCurrentProductTitle() {
   const heading = document.querySelector('h1');
-  if (isVisibleElement(heading)) return normalizeText(heading.textContent);
+  if (isVisibleElement(heading)) return cleanProductName(heading.textContent);
   const mount = findProductDetailToolbarMount();
-  return normalizeText(mount?.textContent);
+  return cleanProductName(mount?.textContent);
+}
+
+function cleanProductName(value) {
+  return normalizeText(value)
+    .replace(/\s*Click to Copy\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function collectCurrentProductForDetail() {

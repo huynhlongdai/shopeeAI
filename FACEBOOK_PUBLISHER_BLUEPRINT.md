@@ -526,6 +526,7 @@ Frontend có thể render:
 - Popup settings.
 - Open target Facebook URL.
 - Copy caption to clipboard.
+- Show a Facebook overlay panel with caption/link actions.
 
 ### Phase 3
 

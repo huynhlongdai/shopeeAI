@@ -342,9 +342,9 @@ Response:
 }
 ```
 
-### Future: POST /api/social/facebook/jobs
+### POST /api/social/facebook/jobs
 
-Endpoint dự kiến cho extension Facebook Publisher. Tạo job đăng/draft bài Facebook từ Shopee affiliate link.
+Tạo job đăng/draft bài Facebook từ Shopee affiliate link cho extension `facebook-publisher`.
 
 ```json
 {
@@ -371,6 +371,31 @@ Auto publish phải đi kèm rate limit:
 - giới hạn số bài/ngày
 - kiểm tra trùng affiliate link/caption
 - chuyển job sang `blocked_requires_user` nếu Facebook yêu cầu xác minh, CAPTCHA, checkpoint, hoặc login lại
+
+### GET /api/social/facebook/jobs
+
+Liệt kê Facebook publisher jobs.
+
+Query:
+
+- `limit`: mặc định 50, tối đa 200.
+- `status`: lọc trạng thái nếu cần.
+
+### GET /api/social/facebook/jobs/next
+
+Endpoint cho extension poll job tiếp theo. Query hỗ trợ `profileId` và `profileName`.
+
+### POST /api/social/facebook/jobs/:id/ready
+
+Extension báo bài đã được chuẩn bị trên Facebook và sẵn sàng để user publish.
+
+### POST /api/social/facebook/jobs/:id/complete
+
+Extension báo bài đã publish và gửi `facebookPostUrl`. Server tự tạo `embeddedPost`.
+
+### POST /api/social/facebook/jobs/:id/fail
+
+Extension báo lỗi hoặc trạng thái cần user xử lý.
 
 ## Legacy Playwright Endpoints
 

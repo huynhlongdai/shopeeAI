@@ -37,6 +37,7 @@
               <option value="product-info">Product info</option>
               <option value="product-links">Product links</option>
               <option value="affiliate-links">Affiliate links only</option>
+              <option value="facebook-post">Facebook post</option>
             </select>
           </label>
           <label>Product or listing URL
@@ -70,6 +71,31 @@
               <input id="subId5">
             </label>
           </div>
+          <section class="inline-panel">
+            <div class="card-head">
+              <h3>Facebook</h3>
+              <span class="hint">Publisher</span>
+            </div>
+            <label>Target page/profile URL
+              <input id="facebookTargetUrl" placeholder="https://www.facebook.com/page">
+            </label>
+            <div class="grid-2-even">
+              <label>Publish mode
+                <select id="facebookPublishMode">
+                  <option value="draft">Draft</option>
+                  <option value="confirm">Confirm</option>
+                  <option value="auto">Auto</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label>Cooldown minutes
+                <input id="facebookCooldownMinutes" type="number" min="1" max="1440" value="45">
+              </label>
+            </div>
+            <label>Caption template
+              <textarea id="facebookCaption" rows="4" placeholder="{name}\n\nGiá: {salePrice}\nLink mua: {affiliateLink}"></textarea>
+            </label>
+          </section>
           <button id="createJob" class="primary wide-btn">Create job</button>
         </section>
 
@@ -126,6 +152,7 @@
             <button id="copyAffiliateLink" class="secondary">Copy affiliate link</button>
             <button id="downloadImages" class="secondary">Download images</button>
             <button id="downloadVideos" class="secondary">Download videos</button>
+            <button id="createFacebookJob" class="secondary">Create FB job</button>
           </div>
         </section>
         <section class="card result-card json-result">
@@ -159,6 +186,9 @@
         </label>
         <label>Affiliate URL
           <input id="affiliateUrl" autocomplete="off">
+        </label>
+        <label>Default Facebook target URL
+          <input id="settingsFacebookTargetUrl" autocomplete="off" placeholder="https://www.facebook.com/page">
         </label>
         <div class="grid-2-even">
           <label>Profile ID
