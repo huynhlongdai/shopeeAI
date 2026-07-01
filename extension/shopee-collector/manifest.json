@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "shopeeAI",
-  "version": "0.3.5",
-  "description": "Collects Shopee product data, media, and affiliate links from your real Chrome session.",
+  "version": "0.5.2",
+  "description": "Collects Shopee product data, media, affiliate links, and publishes Facebook wrap jobs from one Chrome extension.",
   "permissions": ["alarms", "clipboardWrite", "downloads", "scripting", "storage", "tabs"],
   "host_permissions": [
     "https://shopee.vn/*",
@@ -19,6 +19,11 @@
     {
       "matches": ["https://shopee.vn/*", "https://affiliate.shopee.vn/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.facebook.com/*"],
+      "js": ["facebook-content.js"],
       "run_at": "document_idle"
     }
   ],

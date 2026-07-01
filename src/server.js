@@ -34,6 +34,16 @@ let extensionProfiles = new Map();
 let facebookJobs = [];
 let facebookJobCounter = 0;
 let facebookProfiles = new Map();
+let aiDiagnostics = [];
+let facebookSettings = {
+  defaultTargetUrl: normalizeFacebookTargetUrl(process.env.FACEBOOK_DEFAULT_TARGET_URL),
+  publishMode: normalizePublishMode(process.env.FACEBOOK_PUBLISH_MODE || 'draft'),
+  cooldownMinutes: numberFromEnv('FACEBOOK_COOLDOWN_MINUTES', 45),
+  jitterMinutes: numberFromEnv('FACEBOOK_JITTER_MINUTES', 10),
+  maxPostsPerDay: numberFromEnv('FACEBOOK_MAX_POSTS_PER_DAY', 12),
+  updatedAt: '',
+  updatedBy: '',
+};
 
 if (process.argv.includes('--login')) {
   await login();
@@ -147,6 +157,26 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/ai/diagnostics/report') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const report = createAiDiagnosticReport(body);
+    sendJson(res, 200, { ok: true, report });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/ai/diagnostics/latest') {
+    assertAuthorized(req);
+    const limit = Math.min(numberFromQuery(requestUrl.searchParams.get('limit'), 10), 100);
+    sendJson(res, 200, {
+      ok: true,
+      reports: aiDiagnostics.slice(-limit).reverse(),
+      latest: aiDiagnostics.at(-1) || null,
+      total: aiDiagnostics.length,
+    });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/social/facebook/jobs') {
     assertAuthorized(req);
     const body = await readJson(req);
@@ -196,7 +226,12 @@ async function handleRequest(req, res) {
     job.startedAt = new Date().toISOString();
     job.updatedAt = job.startedAt;
     if (profileId) {
-      upsertFacebookProfile({ profileId, state: 'running', currentJobId: job.id });
+      upsertFacebookProfile({
+        profileId,
+        extensionVersion: requestUrl.searchParams.get('extensionVersion') || undefined,
+        state: 'running',
+        currentJobId: job.id,
+      });
     }
     sendJson(res, 200, { ok: true, job });
     return;
@@ -211,6 +246,14 @@ async function handleRequest(req, res) {
     job.result = { ...(job.result || {}), ...body };
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.updatedAt = new Date().toISOString();
+    if (job.workerProfileId) {
+      upsertFacebookProfile({
+        profileId: job.workerProfileId,
+        extensionVersion: body.extensionVersion,
+        state: job.status,
+        currentJobId: '',
+      });
+    }
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -221,13 +264,18 @@ async function handleRequest(req, res) {
     const job = findFacebookJob(facebookCompleteMatch[1]);
     const body = await readJson(req);
     const embeddedPost = body.facebookPostUrl ? createFacebookPostEmbed({ postUrl: body.facebookPostUrl }) : undefined;
-    job.status = 'published';
+    job.status = normalizeFacebookCompleteStatus(body.status || (job.type === 'facebook-comment' ? 'commented' : 'published'));
     job.result = { ...body, embeddedPost };
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
     if (job.workerProfileId) {
-      upsertFacebookProfile({ profileId: job.workerProfileId, state: 'completed', currentJobId: '' });
+      upsertFacebookProfile({
+        profileId: job.workerProfileId,
+        extensionVersion: body.extensionVersion,
+        state: 'completed',
+        currentJobId: '',
+      });
     }
     sendJson(res, 200, { ok: true, job });
     return;
@@ -237,12 +285,27 @@ async function handleRequest(req, res) {
   if (req.method === 'POST' && facebookRetryMatch) {
     assertAuthorized(req);
     const job = findFacebookJob(facebookRetryMatch[1]);
+    const body = await readJson(req).catch(() => ({}));
     job.status = 'queued';
+    job.publishMode = normalizePublishMode(body.publishMode || (job.wrapMode && job.publishMode === 'draft' ? 'auto' : job.publishMode));
     delete job.result;
     delete job.workerProfileId;
     delete job.startedAt;
     delete job.completedAt;
     delete job.failedAt;
+    job.updatedAt = new Date().toISOString();
+    sendJson(res, 200, { ok: true, job });
+    return;
+  }
+
+  const facebookCancelMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)\/cancel$/);
+  if (req.method === 'POST' && facebookCancelMatch) {
+    assertAuthorized(req);
+    const job = findFacebookJob(facebookCancelMatch[1]);
+    if (job.status === 'published' || job.status === 'commented' || job.status === 'completed') {
+      throw httpError(409, 'Completed Facebook jobs cannot be cancelled.');
+    }
+    job.status = 'cancelled';
     job.updatedAt = new Date().toISOString();
     sendJson(res, 200, { ok: true, job });
     return;
@@ -258,6 +321,14 @@ async function handleRequest(req, res) {
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.failedAt = new Date().toISOString();
     job.updatedAt = job.failedAt;
+    if (job.workerProfileId) {
+      upsertFacebookProfile({
+        profileId: job.workerProfileId,
+        extensionVersion: body.extensionVersion,
+        state: job.status,
+        currentJobId: '',
+      });
+    }
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -441,7 +512,7 @@ async function handleRequest(req, res) {
     const normalized =
       job.type === 'product-data' || job.type === 'product-info'
         ? normalizeBrowserProductData(payload)
-        : payload;
+        : normalizeExtensionJobResult(job.type, payload);
     job.status = 'completed';
     job.result = normalized;
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
@@ -803,24 +874,116 @@ function createFacebookPostEmbed(body) {
   };
 }
 
+function createAiDiagnosticReport(body) {
+  const report = {
+    id: `diag-${aiDiagnostics.length + 1}`,
+    source: String(body.source || 'extension').slice(0, 80),
+    profileId: normalizeProfileId(body.profileId) || '',
+    extensionVersion: String(body.extensionVersion || '').slice(0, 40),
+    createdAt: new Date().toISOString(),
+    symptoms: Array.isArray(body.symptoms) ? body.symptoms.slice(0, 30).map(String) : [],
+    checks: body.checks && typeof body.checks === 'object' ? body.checks : {},
+    fixes: Array.isArray(body.fixes) ? body.fixes.slice(0, 30).map(String) : [],
+  };
+  report.analysis = analyzeAiDiagnosticReport(report);
+  aiDiagnostics.push(report);
+  if (aiDiagnostics.length > 200) aiDiagnostics = aiDiagnostics.slice(-200);
+  return report;
+}
+
+function analyzeAiDiagnosticReport(report) {
+  const checks = report.checks || {};
+  const shopeeTabs = Array.isArray(checks.shopeeTabs) ? checks.shopeeTabs : [];
+  const failedTabs = shopeeTabs.filter((tab) => tab.ok === false || tab.injected === false);
+  const tabsWithoutPanel = shopeeTabs.filter((tab) => tab.ok && tab.panelExists === false);
+  const tabsWithoutTools = shopeeTabs.filter((tab) =>
+    tab.ok && tab.isProductPage && Number(tab.detailToolButtons || 0) === 0 && Number(tab.cardToolbars || 0) === 0,
+  );
+  const issues = [];
+  const actions = [];
+
+  if (checks.serverOk === false) {
+    issues.push('Server API không phản hồi từ extension.');
+    actions.push('Kiểm tra API base/token trong Settings và khởi động lại server.');
+  }
+  if (report.symptoms.includes('fb_wrap_failed')) {
+    issues.push(`FB Wrap failed${checks.fbWrapError ? `: ${checks.fbWrapError}` : '.'}`);
+    actions.push('Mở shopeeAI Manager, kiểm tra Facebook target URL, affiliate session, rồi bấm lại FB Wrap.');
+  }
+  if (report.symptoms.includes('fb_wrap_failed') && checks.facebookTargetUrlConfigured === false) {
+    issues.push('Chưa cấu hình Default Facebook target URL cho FB Wrap.');
+    actions.push('Vào Settings, điền Default Facebook target URL dạng https://www.facebook.com/<profile-or-page>, sau đó Save settings.');
+  }
+  if (report.symptoms.includes('fb_wrap_failed') && checks.affiliateLinkAvailable === false) {
+    issues.push('FB Wrap chưa có affiliate link để đăng Facebook.');
+    actions.push('Kiểm tra tab Shopee Affiliate đã đăng nhập, sau đó thử nút Aff trước khi bấm FB Wrap.');
+  }
+  if (!report.extensionVersion) {
+    issues.push('Extension chưa gửi được version trong diagnostic.');
+    actions.push('Reload extension shopeeAI trong chrome://extensions.');
+  }
+  if (!shopeeTabs.length) {
+    issues.push('Không tìm thấy tab shopee.vn đang mở.');
+    actions.push('Mở một trang sản phẩm Shopee rồi chạy AI fix lại.');
+  }
+  if (failedTabs.length) {
+    issues.push(`${failedTabs.length} tab Shopee chưa nhận content script.`);
+    actions.push('Auto-fix sẽ inject lại content.js vào các tab Shopee đang mở.');
+  }
+  if (tabsWithoutPanel.length) {
+    issues.push(`${tabsWithoutPanel.length} tab Shopee chưa có panel shopeeAI.`);
+    actions.push('Auto-fix sẽ reset panel và khởi tạo lại UI.');
+  }
+  if (tabsWithoutTools.length) {
+    issues.push(`${tabsWithoutTools.length} tab sản phẩm chưa có toolbar/button sản phẩm.`);
+    actions.push('Auto-fix sẽ reset toolbar và gắn lại bằng fallback floating nếu Shopee đổi DOM.');
+  }
+  if (checks.facebookPublisherVersion && !/^0\.1\.(6|[7-9]|\d{2,})$/.test(String(checks.facebookPublisherVersion))) {
+    issues.push('Facebook Publisher extension có vẻ đang là bản cũ.');
+    actions.push('Reload shopeeAI Facebook Publisher để chạy flow wrap/publish mới.');
+  }
+  if (!issues.length) {
+    issues.push('Không thấy lỗi cấu hình rõ ràng trong report mới nhất.');
+    actions.push('Nếu UI vẫn không hiện, reload tab Shopee và chạy AI fix lại để lấy report mới.');
+  }
+
+  return {
+    status: issues.some((issue) => /không|chưa|cũ|lỗi/i.test(issue)) ? 'needs_attention' : 'ok',
+    issues,
+    actions,
+  };
+}
+
 function createFacebookJobFromBody(body) {
   const now = new Date().toISOString();
-  const targetUrl = normalizeFacebookTargetUrl(body.targetUrl || process.env.FACEBOOK_DEFAULT_TARGET_URL);
+  const type = normalizeFacebookJobType(body.type);
+  const targetPostUrls = normalizeFacebookUrlList(body.targetPostUrls || body.postUrls || body.posts);
+  const commentMode = normalizeFacebookCommentMode(body.commentMode || body.selectionMode || body.mode);
+  const selectedCommentUrl = type === 'facebook-comment'
+    ? selectFacebookCommentTargetUrl(body.targetPostUrl || body.postUrl || body.targetUrl, targetPostUrls, commentMode)
+    : '';
+  const targetUrl = normalizeFacebookTargetUrl(
+    selectedCommentUrl || body.targetUrl || process.env.FACEBOOK_DEFAULT_TARGET_URL,
+  );
   const affiliateLink = String(body.affiliateLink || body.link || '').trim();
-  const caption = String(body.caption || '').trim();
+  const caption = normalizePostText(body.caption || body.commentText || body.comment);
   if (!targetUrl) throw httpError(400, '`targetUrl` is required.');
-  if (!affiliateLink) throw httpError(400, '`affiliateLink` is required.');
-  if (!caption) throw httpError(400, '`caption` is required.');
+  if (type !== 'facebook-comment' && !affiliateLink) throw httpError(400, '`affiliateLink` is required.');
+  if (!caption) throw httpError(400, type === 'facebook-comment' ? '`commentText` is required.' : '`caption` is required.');
 
   const publishMode = normalizePublishMode(body.publishMode || process.env.FACEBOOK_PUBLISH_MODE || 'draft');
   const schedule = normalizeFacebookSchedule(body.schedule || body);
   const job = {
     id: `fb-${++facebookJobCounter}`,
-    type: String(body.type || 'facebook-publish-post'),
+    type,
     status: 'queued',
     targetUrl,
     affiliateLink,
     caption,
+    commentText: type === 'facebook-comment' ? caption : '',
+    targetPostUrls,
+    commentMode: type === 'facebook-comment' ? commentMode : '',
+    wrapMode: Boolean(body.wrapMode || body.facebookWrap || body.copyFacebookWrappedLink),
     media: Array.isArray(body.media) ? body.media.map(String).filter(Boolean) : [],
     productKey: normalizeText(body.productKey),
     publishMode,
@@ -833,11 +996,38 @@ function createFacebookJobFromBody(body) {
   return job;
 }
 
+function normalizeFacebookJobType(value) {
+  const type = String(value || 'facebook-publish-post').trim().toLowerCase();
+  return ['facebook-publish-post', 'facebook-comment'].includes(type) ? type : 'facebook-publish-post';
+}
+
+function normalizeFacebookUrlList(value) {
+  const rows = Array.isArray(value) ? value : String(value || '').split(/\s+/);
+  return rows.map(normalizeFacebookTargetUrl).filter(Boolean);
+}
+
+function normalizeFacebookCommentMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return ['random', 'first', 'specific'].includes(mode) ? mode : 'specific';
+}
+
+function selectFacebookCommentTargetUrl(explicitUrl, urls, mode) {
+  const explicit = normalizeFacebookTargetUrl(explicitUrl);
+  if (explicit) return explicit;
+  if (!urls.length) throw httpError(400, '`targetPostUrl` or `targetPostUrls` is required for facebook-comment.');
+  if (mode === 'random') return urls[Math.floor(Math.random() * urls.length)];
+  return urls[0];
+}
+
 function normalizeFacebookTargetUrl(value) {
   const url = String(value || '').trim();
   const parsed = safeUrl(url);
   if (!parsed || !/(^|\.)facebook\.com$/i.test(parsed.hostname)) return '';
   return parsed.toString();
+}
+
+function normalizePostText(value) {
+  return String(value || '').replace(/\\n/g, '\n').trim();
 }
 
 function normalizePublishMode(value) {
@@ -848,6 +1038,11 @@ function normalizePublishMode(value) {
 function normalizeFacebookReadyStatus(value) {
   const status = String(value || '').trim().toLowerCase();
   return ['ready_for_publish', 'published_pending_url'].includes(status) ? status : 'ready_for_publish';
+}
+
+function normalizeFacebookCompleteStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  return ['published', 'commented', 'completed'].includes(status) ? status : 'published';
 }
 
 function normalizeFacebookSchedule(value = {}) {
@@ -1627,7 +1822,7 @@ function normalizeProductLinksInput(body) {
 
 function normalizeBrowserProductData(body) {
   const url = String(body.url || '').trim();
-  const name = normalizeText(body.name);
+  const name = cleanProductName(body.name);
   if (!url) {
     throw httpError(400, '`url` is required.');
   }
@@ -1754,6 +1949,21 @@ function summarizeReviews(items) {
     averageRating: average(items.map((item) => item.rating)),
     snippets: comments.slice(0, 5),
   };
+}
+
+function normalizeExtensionJobResult(type, payload) {
+  if (type !== 'product-affiliate' || !payload || typeof payload !== 'object') return payload;
+  const productData = payload.productData && typeof payload.productData === 'object'
+    ? {
+        ...payload.productData,
+        name: cleanProductName(payload.productData.name),
+      }
+    : payload.productData;
+  return { ...payload, productData };
+}
+
+function cleanProductName(value) {
+  return normalizeText(String(value || '').replace(/\s*Click to Copy\s*$/i, ''));
 }
 
 function normalizeText(value) {

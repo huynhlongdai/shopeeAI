@@ -366,6 +366,46 @@ Tạo job đăng/draft bài Facebook từ Shopee affiliate link cho extension `f
 
 Khi `publishMode = auto`, extension Facebook Publisher sẽ mở target Facebook, tìm composer, điền caption/link, bấm Post, rồi cố gắng phát hiện URL bài vừa đăng. Nếu phát hiện được `facebookPostUrl`, job được chuyển sang `published` và server trả `result.embeddedPost`. Nếu Facebook đã nhận click đăng nhưng chưa expose URL bài viết, job chuyển sang `published_pending_url` để tránh trả nhầm embedded của bài cũ.
 
+Facebook-wrap affiliate flow:
+
+```json
+{
+  "type": "facebook-publish-post",
+  "targetUrl": "https://www.facebook.com/Mienguyen.1203",
+  "affiliateLink": "https://s.shopee.vn/xxxxx",
+  "caption": "Tên sản phẩm\nLink mua: https://s.shopee.vn/xxxxx",
+  "publishMode": "auto",
+  "wrapMode": true
+}
+```
+
+Sau khi publish, extension cố lấy các link Shopee xuất hiện trong bài Facebook. Kết quả nằm ở:
+
+- `result.facebookPostUrl`
+- `result.facebookWrappedShopeeLink`
+- `result.facebookShopeeLinks[]`
+
+Tạo comment job trên danh sách bài viết chỉ định:
+
+```json
+{
+  "type": "facebook-comment",
+  "targetPostUrls": [
+    "https://www.facebook.com/Mienguyen.1203/posts/pfbid...",
+    "https://www.facebook.com/Mienguyen.1203/posts/pfbid..."
+  ],
+  "commentMode": "random",
+  "commentText": "Link mua: https://s.shopee.vn/xxxxx",
+  "publishMode": "auto",
+  "schedule": {
+    "cooldownMinutes": 45,
+    "jitterMinutes": 10
+  }
+}
+```
+
+`facebook-comment` chỉ chọn từ `targetPostUrls` đã cấu hình hoặc `targetPostUrl` cụ thể. Không có crawler tự bình luận vào bài ngoài allowlist.
+
 Auto publish phải đi kèm rate limit:
 
 - cooldown giữa các bài
@@ -407,6 +447,55 @@ Extension báo lỗi hoặc trạng thái cần user xử lý.
 
 Đưa Facebook job về lại `queued` để retry sau khi reload extension hoặc đổi cấu hình.
 
+## AI Diagnostics / Auto Fix
+
+Module này hỗ trợ extension tự chẩn đoán lỗi thường gặp: server không kết nối, tab Shopee chưa inject content script, panel không hiện, button sản phẩm bị mất, hoặc extension đang chạy version cũ.
+
+### POST /api/ai/diagnostics/report
+
+Extension gửi report diagnostic và nhận lại phân tích `issues/actions`.
+
+Ví dụ:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/ai/diagnostics/report \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "shopeeAI-extension",
+    "profileId": "profile-1",
+    "extensionVersion": "0.4.0",
+    "symptoms": ["buttons_not_visible"],
+    "checks": {
+      "serverOk": true,
+      "shopeeTabs": [
+        {
+          "ok": true,
+          "isProductPage": true,
+          "panelExists": false,
+          "detailToolButtons": 0,
+          "cardToolbars": 0
+        }
+      ]
+    },
+    "fixes": []
+  }'
+```
+
+Response gồm:
+
+- `report.analysis.status`
+- `report.analysis.issues`
+- `report.analysis.actions`
+
+### GET /api/ai/diagnostics/latest
+
+Lấy report diagnostic mới nhất.
+
+Query:
+
+- `limit`: mặc định 10, tối đa 100.
+
 ## Legacy Playwright Endpoints
 
 Các endpoint này dùng browser Playwright local, có thể bị Shopee chặn/captcha hơn extension.
@@ -432,6 +521,8 @@ Lấy thông tin sản phẩm và review.
 Lấy thông tin sản phẩm và affiliate link qua Playwright.
 
 ## Flow Khuyến Nghị
+
+> Từ bản `shopeeAI 0.5.0`, Shopee Collector và Facebook Publisher đã gộp vào một extension duy nhất tại `extension/shopee-collector`. Không cần dùng extension `extension/facebook-publisher` riêng nữa.
 
 1. Parse ID nhanh bằng `/api/shopee/product-id`.
 2. Tạo job bằng `/api/shopee/extension/product-affiliate`.

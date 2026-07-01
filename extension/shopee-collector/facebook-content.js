@@ -13,7 +13,7 @@ if (!globalThis.__shopeeAiFacebookPublisherLoaded) {
 
 async function prepareFacebookPost(job) {
   renderPublisherPanel(job);
-  await navigator.clipboard.writeText(job.commentText || job.caption || '').catch(() => {});
+  await navigator.clipboard.writeText(normalizePostText(job.commentText || job.caption || '')).catch(() => {});
   if (job.publishMode !== 'auto') {
     return { ready: true, note: 'Draft mode: caption copied for manual publish.' };
   }
@@ -92,13 +92,13 @@ function renderPublisherPanel(job) {
       <strong>Mode:</strong> ${escapeHtml(job.publishMode || 'draft')}<br>
       <strong>Affiliate:</strong> ${escapeHtml(job.affiliateLink || '')}
     </div>
-    <textarea id="saifb-caption">${escapeHtml(job.commentText || job.caption || '')}</textarea>
+    <textarea id="saifb-caption">${escapeHtml(normalizePostText(job.commentText || job.caption || ''))}</textarea>
     <div class="saifb-actions">
       <button id="saifb-copy-caption">Copy caption</button>
       <button id="saifb-copy-link" class="alt">Copy link</button>
       <button id="saifb-close" class="muted">Close</button>
     </div>
-    <p id="saifb-status" style="margin-top:10px">Draft mode copies the caption. Auto mode opens the composer, fills content, and clicks Post.</p>
+    <p id="saifb-status" style="margin-top:10px">${job.publishMode === 'auto' ? 'Auto mode is starting. The extension will open the composer, fill content, and click Post.' : 'Draft/manual mode copies the caption for review.'}</p>
   `;
   document.documentElement.appendChild(panel);
 
@@ -114,7 +114,7 @@ function renderPublisherPanel(job) {
 async function autoCommentOnFacebookPost(job) {
   updatePanelStatus('Auto mode: finding Facebook comment box...');
   const commentBox = await waitForElement(findCommentTextbox, 15000, 'Facebook comment textbox not found.');
-  setComposerText(commentBox, job.commentText || job.caption || job.affiliateLink || '');
+  setComposerText(commentBox, normalizePostText(job.commentText || job.caption || job.affiliateLink || ''));
   await sleep(1000);
 
   updatePanelStatus('Submitting comment...');
@@ -143,7 +143,7 @@ async function autoPublishFacebookPost(job) {
 
   updatePanelStatus('Filling caption...');
   const textbox = await waitForElement(findComposerTextbox, 15000, 'Facebook composer textbox not found.');
-  setComposerText(textbox, job.caption || job.affiliateLink || '');
+  setComposerText(textbox, normalizePostText(job.caption || job.affiliateLink || ''));
   await sleep(1200);
 
   updatePanelStatus('Advancing Facebook publish flow...');
@@ -211,11 +211,11 @@ function setComposerText(textbox, text) {
 }
 
 function findEnabledPostButton() {
-  return findEnabledButton(/^(post|đăng|publish|share|chia sẻ)(\s|$)/i);
+  return findEnabledButton(/^(post|đăng|publish|share|chia sẻ)$/i);
 }
 
 function findEnabledNextButton() {
-  return findEnabledButton(/^(next|tiếp)(\s|$)/i);
+  return findEnabledButton(/^(next|tiếp)$/i);
 }
 
 function findEnabledCommentButton() {
@@ -223,13 +223,33 @@ function findEnabledCommentButton() {
 }
 
 function findEnabledButton(pattern) {
-  const dialog = visibleElements('[role="dialog"]').at(-1) || document;
-  return visibleElements('[role="button"], button', dialog)
+  return visibleElements('[role="button"], button')
+    .filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.top >= 0 && rect.top <= window.innerHeight && rect.width > 0 && rect.height > 0;
+    })
+    .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)
     .find((node) => {
-      const text = normalizeText(`${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`);
+      const text = normalizeButtonLabel(node);
       const disabled = node.getAttribute('aria-disabled') === 'true' || node.disabled;
       return !disabled && pattern.test(text);
     });
+}
+
+function normalizeButtonLabel(node) {
+  let text = normalizeText(`${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`);
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2 && parts.length % 2 === 0) {
+    const half = parts.length / 2;
+    const first = parts.slice(0, half).join(' ');
+    const second = parts.slice(half).join(' ');
+    if (first === second) text = first;
+  }
+  return text;
+}
+
+function normalizePostText(value) {
+  return String(value || '').replace(/\\n/g, '\n');
 }
 
 async function advancePublishFlow() {

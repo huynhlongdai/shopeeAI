@@ -6,10 +6,17 @@ const DEFAULT_SETTINGS = {
   subIds: ['n8n', '', '', '', ''],
   profileId: 'profile-1',
   profileName: 'Profile 1',
+  facebookPublisherEnabled: true,
+  facebookProfileId: 'facebook-profile-1',
+  facebookProfileName: 'Facebook Profile 1',
   facebookTargetUrl: '',
-  facebookPublishMode: 'draft',
+  facebookPublishMode: 'auto',
   facebookCooldownMinutes: 45,
+  facebookJitterMinutes: 10,
+  facebookMaxPostsPerDay: 12,
   facebookCaption: '{name}\\n\\nGiá: {salePrice}\\nĐã bán: {sold}\\nLink mua: {affiliateLink}',
+  facebookCommentPostUrls: '',
+  facebookCommentMode: 'specific',
 };
 
 let settings;
@@ -71,12 +78,22 @@ const API_DOC_SECTIONS = [
     ],
   },
   {
+    title: 'AI Diagnostics',
+    text: 'Rule-based self-healing diagnostics for extension injection, missing Shopee buttons, server connectivity, and queue state.',
+    endpoints: [
+      ['POST', '/api/ai/diagnostics/report', 'Extension posts diagnostic reports and receives issues/actions.'],
+      ['GET', '/api/ai/diagnostics/latest?limit=10', 'Read latest AI diagnostic reports.'],
+    ],
+  },
+  {
     title: 'Facebook Publisher',
     text: 'Helpers for returning a Facebook Embedded Post after a Shopee affiliate link is posted on a validated Facebook channel.',
     endpoints: [
       ['POST', '/api/social/facebook/embed', 'Body: {"postUrl":"https://www.facebook.com/.../posts/...","width":500,"showText":true}.'],
       ['POST', '/api/social/facebook/extract-shopee-links', 'Extract Shopee links from Facebook text, hrefs, or l.facebook.com redirect URLs.'],
       ['POST', '/api/social/facebook/jobs', 'Create a Facebook Publisher job. Body includes targetUrl, affiliateLink, caption, publishMode, and schedule.'],
+      ['POST', '/api/social/facebook/jobs', 'Create a Facebook wrap job, then copy result.facebookWrappedShopeeLink after published.'],
+      ['POST', '/api/social/facebook/jobs', 'Create a Facebook comment job with type=facebook-comment, commentText, targetPostUrls, and commentMode=random|specific.'],
       ['GET', '/api/social/facebook/jobs?limit=50', 'List Facebook Publisher jobs.'],
     ],
   },
@@ -87,10 +104,15 @@ const els = {
   apiToken: document.querySelector('#apiToken'),
   affiliateUrl: document.querySelector('#affiliateUrl'),
   settingsFacebookTargetUrl: document.querySelector('#settingsFacebookTargetUrl'),
+  facebookPublisherEnabled: document.querySelector('#facebookPublisherEnabled'),
+  facebookProfileId: document.querySelector('#facebookProfileId'),
+  facebookProfileName: document.querySelector('#facebookProfileName'),
   profileId: document.querySelector('#profileId'),
   profileName: document.querySelector('#profileName'),
   enabled: document.querySelector('#enabled'),
   serverStatus: document.querySelector('#serverStatus'),
+  aiStatus: document.querySelector('#aiStatus'),
+  aiSummary: document.querySelector('#aiSummary'),
   jobType: document.querySelector('#jobType'),
   jobUrl: document.querySelector('#jobUrl'),
   keyword: document.querySelector('#keyword'),
@@ -105,6 +127,8 @@ const els = {
   facebookPublishMode: document.querySelector('#facebookPublishMode'),
   facebookCooldownMinutes: document.querySelector('#facebookCooldownMinutes'),
   facebookCaption: document.querySelector('#facebookCaption'),
+  facebookCommentPostUrls: document.querySelector('#facebookCommentPostUrls'),
+  facebookCommentMode: document.querySelector('#facebookCommentMode'),
   filterStatus: document.querySelector('#filterStatus'),
   statQueued: document.querySelector('#statQueued'),
   statRunning: document.querySelector('#statRunning'),
@@ -121,6 +145,8 @@ init();
 
 document.querySelector('#saveSettings').addEventListener('click', saveSettings);
 document.querySelector('#checkServer').addEventListener('click', checkServer);
+document.querySelector('#runAiDiagnostics').addEventListener('click', () => runAiTool(false));
+document.querySelector('#runAiFix').addEventListener('click', () => runAiTool(true));
 document.querySelector('#createJob').addEventListener('click', createJob);
 document.querySelector('#runQueue').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'poll-now' }).then(refreshJobs));
 document.querySelector('#openSettings').addEventListener('click', openSettings);
@@ -141,6 +167,8 @@ document.querySelector('#copyAffiliateLink').addEventListener('click', copyAffil
 document.querySelector('#downloadImages').addEventListener('click', () => downloadMedia('images'));
 document.querySelector('#downloadVideos').addEventListener('click', () => downloadMedia('videos'));
 document.querySelector('#createFacebookJob').addEventListener('click', createFacebookJobFromSelected);
+document.querySelector('#createFacebookWrapJob').addEventListener('click', createFacebookWrapJobFromSelected);
+document.querySelector('#copyFacebookWrappedLink').addEventListener('click', copyFacebookWrappedLink);
 els.filterStatus.addEventListener('change', () => renderJobs(allJobs));
 
 async function init() {
@@ -149,10 +177,15 @@ async function init() {
   els.apiToken.value = settings.apiToken;
   els.affiliateUrl.value = settings.affiliateUrl;
   els.settingsFacebookTargetUrl.value = settings.facebookTargetUrl || '';
+  els.facebookPublisherEnabled.checked = settings.facebookPublisherEnabled !== false;
+  els.facebookProfileId.value = settings.facebookProfileId || DEFAULT_SETTINGS.facebookProfileId;
+  els.facebookProfileName.value = settings.facebookProfileName || DEFAULT_SETTINGS.facebookProfileName;
   els.facebookTargetUrl.value = settings.facebookTargetUrl || '';
   els.facebookPublishMode.value = settings.facebookPublishMode || DEFAULT_SETTINGS.facebookPublishMode;
   els.facebookCooldownMinutes.value = settings.facebookCooldownMinutes || DEFAULT_SETTINGS.facebookCooldownMinutes;
   els.facebookCaption.value = settings.facebookCaption || DEFAULT_SETTINGS.facebookCaption;
+  els.facebookCommentPostUrls.value = settings.facebookCommentPostUrls || '';
+  els.facebookCommentMode.value = settings.facebookCommentMode || DEFAULT_SETTINGS.facebookCommentMode;
   els.profileId.value = settings.profileId || DEFAULT_SETTINGS.profileId;
   els.profileName.value = settings.profileName || DEFAULT_SETTINGS.profileName;
   els.enabled.checked = Boolean(settings.enabled);
@@ -160,6 +193,7 @@ async function init() {
     input.value = settings.subIds?.[index] || '';
   });
   await checkServer();
+  await loadLatestAiDiagnostic();
   await refreshJobs();
   renderApiDocs();
   setInterval(refreshJobs, 5000);
@@ -171,9 +205,14 @@ async function saveSettings() {
     apiToken: els.apiToken.value.trim() || DEFAULT_SETTINGS.apiToken,
     affiliateUrl: els.affiliateUrl.value.trim() || DEFAULT_SETTINGS.affiliateUrl,
     facebookTargetUrl: els.settingsFacebookTargetUrl.value.trim() || els.facebookTargetUrl.value.trim(),
+    facebookPublisherEnabled: els.facebookPublisherEnabled.checked,
+    facebookProfileId: normalizeProfileId(els.facebookProfileId.value) || DEFAULT_SETTINGS.facebookProfileId,
+    facebookProfileName: els.facebookProfileName.value.trim() || els.facebookProfileId.value.trim() || DEFAULT_SETTINGS.facebookProfileName,
     facebookPublishMode: els.facebookPublishMode.value || DEFAULT_SETTINGS.facebookPublishMode,
     facebookCooldownMinutes: Number(els.facebookCooldownMinutes.value) || DEFAULT_SETTINGS.facebookCooldownMinutes,
     facebookCaption: els.facebookCaption.value || DEFAULT_SETTINGS.facebookCaption,
+    facebookCommentPostUrls: els.facebookCommentPostUrls.value.trim(),
+    facebookCommentMode: els.facebookCommentMode.value || DEFAULT_SETTINGS.facebookCommentMode,
     profileId: normalizeProfileId(els.profileId.value) || DEFAULT_SETTINGS.profileId,
     profileName: els.profileName.value.trim() || els.profileId.value.trim() || DEFAULT_SETTINGS.profileName,
     enabled: els.enabled.checked,
@@ -195,6 +234,70 @@ async function checkServer() {
   }
 }
 
+async function loadLatestAiDiagnostic() {
+  try {
+    const response = await api('/api/ai/diagnostics/latest?limit=1');
+    if (response.latest) renderAiDiagnostic(response.latest);
+  } catch {
+    renderAiDiagnostic({
+      analysis: {
+        status: 'needs_attention',
+        issues: ['Chưa có AI diagnostic hoặc server chưa hỗ trợ endpoint mới.'],
+        actions: ['Reload server/extension rồi chạy Diagnose.'],
+      },
+    });
+  }
+}
+
+async function runAiTool(repair) {
+  els.aiStatus.textContent = repair ? 'Fixing' : 'Checking';
+  els.aiStatus.className = 'pill';
+  els.aiSummary.textContent = repair ? 'Running auto-fix across open Shopee tabs...' : 'Collecting extension diagnostics...';
+  const response = await chrome.runtime.sendMessage({
+    type: repair ? 'run-ai-fix' : 'run-ai-diagnostics',
+    symptoms: repair ? ['buttons_not_visible', 'extension_not_working'] : ['manual_check'],
+  });
+  if (!response?.ok) {
+    renderAiDiagnostic({
+      analysis: {
+        status: 'needs_attention',
+        issues: [response?.error || 'AI tool failed.'],
+        actions: ['Reload shopeeAI extension and try again.'],
+      },
+    });
+    return;
+  }
+  renderAiDiagnostic(response.result);
+  await navigator.clipboard.writeText(JSON.stringify(response.result, null, 2)).catch(() => {});
+  toast(repair ? 'AI fix report copied.' : 'Diagnostic report copied.');
+}
+
+function renderAiDiagnostic(report) {
+  const analysis = report?.analysis || {};
+  const issues = analysis.issues || [];
+  const actions = analysis.actions || [];
+  const status = analysis.status || 'idle';
+  els.aiStatus.textContent = status === 'ok' ? 'OK' : status === 'idle' ? 'Idle' : 'Needs attention';
+  els.aiStatus.className = status === 'ok' ? 'pill online' : status === 'idle' ? 'pill' : 'pill offline';
+  els.aiSummary.innerHTML = `
+    <div class="ai-columns">
+      <section>
+        <h3>Issues</h3>
+        ${issues.map((issue) => `<p>${escapeHtml(issue)}</p>`).join('') || '<p>No issues found.</p>'}
+      </section>
+      <section>
+        <h3>Actions</h3>
+        ${actions.map((action) => `<p>${escapeHtml(action)}</p>`).join('') || '<p>No action needed.</p>'}
+      </section>
+      <section>
+        <h3>Tabs</h3>
+        <p>${escapeHtml((report?.checks?.shopeeTabs || []).length)} Shopee tabs checked.</p>
+        <p>Extension: ${escapeHtml(report?.extensionVersion || 'unknown')}</p>
+      </section>
+    </div>
+  `;
+}
+
 async function createJob() {
   const type = els.jobType.value;
   const body = { type, limit: Number(els.limit.value) || 20 };
@@ -206,10 +309,23 @@ async function createJob() {
 
   if (type === 'facebook-post') {
     const response = await createFacebookJob({
+      type: 'facebook-publish-post',
       affiliateLink: url,
       caption: renderCaptionTemplate({}, url),
     });
     toast(`Created Facebook job #${response.job.id}`);
+    return;
+  }
+
+  if (type === 'facebook-comment') {
+    const response = await createFacebookJob({
+      type: 'facebook-comment',
+      affiliateLink: url,
+      caption: renderCaptionTemplate({}, url),
+      targetPostUrls: getFacebookCommentPostUrls(),
+      commentMode: els.facebookCommentMode.value || settings.facebookCommentMode || 'specific',
+    });
+    toast(`Created Facebook comment job #${response.job.id}`);
     return;
   }
 
@@ -241,6 +357,7 @@ async function createFacebookJobFromSelected() {
   const affiliateLink = getAffiliateLinkFromJob(selectedJob);
   if (!affiliateLink) return toast('No affiliate link found.');
   const response = await createFacebookJob({
+    type: 'facebook-publish-post',
     affiliateLink,
     caption: renderCaptionTemplate(product, affiliateLink),
     productKey: product?.shopId && product?.itemId ? `${product.shopId}.${product.itemId}` : '',
@@ -249,18 +366,50 @@ async function createFacebookJobFromSelected() {
   toast(`Created Facebook job #${response.job.id}`);
 }
 
-async function createFacebookJob({ affiliateLink, caption, productKey = '', media = [] }) {
+async function createFacebookWrapJobFromSelected() {
+  if (!selectedJob) return toast('Select a product-affiliate job first.');
+  const product = getProductFromJob(selectedJob);
+  const affiliateLink = getAffiliateLinkFromJob(selectedJob);
+  if (!affiliateLink) return toast('No affiliate link found.');
+  const response = await createFacebookJob({
+    type: 'facebook-publish-post',
+    affiliateLink,
+    caption: renderCaptionTemplate(product, affiliateLink),
+    productKey: product?.shopId && product?.itemId ? `${product.shopId}.${product.itemId}` : '',
+    media: getProductImages(product).slice(0, 4),
+    wrapMode: true,
+  });
+  toast(`Created Facebook wrap job #${response.job.id}`);
+  await refreshJobs();
+}
+
+async function createFacebookJob({
+  type = 'facebook-publish-post',
+  affiliateLink = '',
+  caption,
+  productKey = '',
+  media = [],
+  targetPostUrls = [],
+  commentMode = 'specific',
+  wrapMode = false,
+}) {
   const targetUrl = els.facebookTargetUrl.value.trim() || settings.facebookTargetUrl;
-  if (!targetUrl) throw new Error('Facebook target URL is required.');
-  if (!affiliateLink) throw new Error('Affiliate link is required.');
+  if (type !== 'facebook-comment' && !targetUrl) throw new Error('Facebook target URL is required.');
+  if (type !== 'facebook-comment' && !affiliateLink) throw new Error('Affiliate link is required.');
+  if (type === 'facebook-comment' && !targetPostUrls.length) throw new Error('At least one Facebook post URL is required.');
   return api('/api/social/facebook/jobs', {
     method: 'POST',
     body: JSON.stringify({
+      type,
       targetUrl,
       affiliateLink,
       caption,
+      commentText: type === 'facebook-comment' ? caption : undefined,
+      targetPostUrls,
+      commentMode,
       media,
       productKey,
+      wrapMode,
       publishMode: els.facebookPublishMode.value || settings.facebookPublishMode || 'draft',
       schedule: {
         cooldownMinutes: Number(els.facebookCooldownMinutes.value) || settings.facebookCooldownMinutes || 45,
@@ -269,9 +418,17 @@ async function createFacebookJob({ affiliateLink, caption, productKey = '', medi
   });
 }
 
+function getFacebookCommentPostUrls() {
+  return els.facebookCommentPostUrls.value
+    .split(/\n+/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+}
+
 function renderCaptionTemplate(product, affiliateLink) {
   const template = els.facebookCaption.value || DEFAULT_SETTINGS.facebookCaption;
   return template
+    .replace(/\\n/g, '\n')
     .replaceAll('{name}', product?.name || '')
     .replaceAll('{description}', product?.description || '')
     .replaceAll('{salePrice}', product?.salePrice || product?.price || '')
@@ -285,12 +442,18 @@ function renderCaptionTemplate(product, affiliateLink) {
 }
 
 async function refreshJobs() {
-  const response = await api('/api/shopee/extension/jobs/created?limit=100');
-  allJobs = response.jobs || [];
+  const [shopeeResponse, facebookResponse] = await Promise.all([
+    api('/api/shopee/extension/jobs/created?limit=100'),
+    api('/api/social/facebook/jobs?limit=100').catch(() => ({ jobs: [] })),
+  ]);
+  const shopeeJobs = (shopeeResponse.jobs || []).map((job) => ({ ...job, jobSource: 'shopee' }));
+  const facebookJobs = (facebookResponse.jobs || []).map((job) => ({ ...job, jobSource: 'facebook' }));
+  allJobs = [...facebookJobs, ...shopeeJobs]
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0));
   renderStats(allJobs);
   renderJobs(allJobs);
   if (selectedJob) {
-    const updated = allJobs.find((job) => job.id === selectedJob.id);
+    const updated = allJobs.find((job) => job.id === selectedJob.id && job.jobSource === selectedJob.jobSource);
     if (updated) selectJob(updated);
   }
 }
@@ -324,13 +487,13 @@ function renderStats(jobs) {
 }
 
 function renderJob(job) {
-  const title = job.url || job.input?.keyword || job.input?.links?.[0] || '';
+  const title = job.url || job.targetUrl || job.input?.keyword || job.input?.links?.[0] || '';
   const profile = job.targetProfileId ? ` → ${job.targetProfileId}` : job.workerProfileId ? ` · ${job.workerProfileId}` : '';
   const updated = (job.updatedAt || job.createdAt || '').slice(11, 19);
   return `
     <article class="job ${selectedJob?.id === job.id ? 'selected' : ''}">
       <strong>#${escapeHtml(job.id)}</strong>
-      <span title="${escapeHtml(profile)}">${escapeHtml(job.type || 'job')}${escapeHtml(profile)}</span>
+      <span title="${escapeHtml(profile)}">${escapeHtml(job.jobSource === 'facebook' ? 'fb:' : '')}${escapeHtml(job.type || 'job')}${escapeHtml(profile)}</span>
       <span class="job-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
       <span class="status ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
       <span>${escapeHtml(updated)}</span>
@@ -355,6 +518,7 @@ function summarizeJob(job) {
   const product = getProductFromJob(job);
   const linkCollection = result.productLinks;
   const link = result.affiliateLink?.links?.[0]?.shortLink;
+  const facebookWrappedLink = getFacebookWrappedLinkFromJob(job);
   const offer = result.affiliateOffer?.bestCommission;
   const images = getProductImages(product);
   const videos = getProductVideos(product);
@@ -374,6 +538,9 @@ function summarizeJob(job) {
       ${product?.revenue ? summaryField('Revenue est.', formatMoney(product.revenue)) : ''}
       ${linkCollection?.count ? summaryField('Product links', linkCollection.count) : ''}
       ${link ? summaryField('Affiliate link', `<a href="${escapeHtml(link)}" target="_blank">${escapeHtml(link)}</a>`, true, false) : ''}
+      ${result.facebookPostUrl ? summaryField('Facebook post', `<a href="${escapeHtml(result.facebookPostUrl)}" target="_blank">${escapeHtml(result.facebookPostUrl)}</a>`, true, false) : ''}
+      ${facebookWrappedLink ? summaryField('FB Shopee link', `<a href="${escapeHtml(facebookWrappedLink)}" target="_blank">${escapeHtml(facebookWrappedLink)}</a>`, true, false) : ''}
+      ${result.commentUrl ? summaryField('Facebook comment', `<a href="${escapeHtml(result.commentUrl)}" target="_blank">${escapeHtml(result.commentUrl)}</a>`, true, false) : ''}
       ${offer ? summaryField('Best commission', `${offer.channelType || ''} ${offer.estimatedCommissionAmount || ''}`, true) : ''}
       ${images.length || videos.length ? summaryField('Media', `${images.length} images · ${videos.length} videos`) : ''}
       ${description ? summaryField('Description', description.slice(0, 700), true) : ''}
@@ -384,7 +551,11 @@ function summarizeJob(job) {
 }
 
 async function postJobAction(id, action) {
-  await api(`/api/shopee/extension/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: '{}' });
+  const job = allJobs.find((row) => row.id === id);
+  const endpoint = job?.jobSource === 'facebook'
+    ? `/api/social/facebook/jobs/${encodeURIComponent(id)}/${action}`
+    : `/api/shopee/extension/jobs/${encodeURIComponent(id)}/${action}`;
+  await api(endpoint, { method: 'POST', body: '{}' });
   toast(`${action} job #${id}`);
   await refreshJobs();
 }
@@ -436,10 +607,24 @@ async function copyAffiliateLink() {
   toast('Copied affiliate link.');
 }
 
+async function copyFacebookWrappedLink() {
+  const link = getFacebookWrappedLinkFromJob(selectedJob);
+  if (!link) return toast('No Facebook-wrapped Shopee link found.');
+  await navigator.clipboard.writeText(link);
+  toast('Copied Facebook Shopee link.');
+}
+
 function getAffiliateLinkFromJob(job) {
   return job?.result?.affiliateLink?.links?.[0]?.shortLink
     || job?.result?.affiliateLink?.shortLink
     || job?.result?.links?.[0]?.shortLink
+    || '';
+}
+
+function getFacebookWrappedLinkFromJob(job) {
+  return job?.result?.facebookWrappedShopeeLink
+    || job?.result?.facebookShopeeLinks?.[0]?.url
+    || job?.result?.facebookShopeeLinks?.[0]?.targetUrl
     || '';
 }
 

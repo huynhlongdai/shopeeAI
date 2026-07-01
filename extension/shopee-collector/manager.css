@@ -71,6 +71,37 @@ h3 { font-size: 14px; letter-spacing: 0; }
   padding: 16px;
 }
 
+.ai-card {
+  box-shadow: 0 10px 24px rgba(20, 32, 51, .06);
+}
+
+.ai-summary {
+  background: var(--card-soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  padding: 10px;
+}
+
+.ai-columns {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ai-columns section {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+}
+
+.ai-columns h3 {
+  color: var(--text);
+}
+
 .workbench {
   display: grid;
   gap: 16px;
@@ -478,6 +509,9 @@ pre {
     flex-direction: column;
   }
   .stats, .subids, .grid-2, .grid-2-even, .summary-grid, .action-grid {
+    grid-template-columns: 1fr;
+  }
+  .ai-columns {
     grid-template-columns: 1fr;
   }
   .docs-actions, .endpoint-head {

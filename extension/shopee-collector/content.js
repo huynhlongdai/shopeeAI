@@ -1,41 +1,56 @@
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === 'collect-shopee-product') {
-    collectShopeeProduct()
-      .then((productData) => sendResponse({ ok: true, productData }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+if (!globalThis.__shopeeAiCollectorListenerInstalled) {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === 'collect-shopee-product') {
+      collectShopeeProduct()
+        .then((productData) => sendResponse({ ok: true, productData }))
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
 
-    return true;
-  }
+      return true;
+    }
 
-  if (message?.type === 'collect-affiliate-links') {
-    collectAffiliateLinks(message.input)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    if (message?.type === 'collect-affiliate-links') {
+      collectAffiliateLinks(message.input)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
 
-    return true;
-  }
+      return true;
+    }
 
-  if (message?.type === 'collect-affiliate-offer') {
-    collectAffiliateOffer(message.itemId)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    if (message?.type === 'collect-affiliate-offer') {
+      collectAffiliateOffer(message.itemId)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
 
-    return true;
-  }
+      return true;
+    }
 
-  if (message?.type === 'collect-product-links') {
-    collectProductLinks(message.input)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    if (message?.type === 'collect-product-links') {
+      collectProductLinks(message.input)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
 
-    return true;
-  }
+      return true;
+    }
 
-  return false;
-});
+    if (message?.type === 'diagnose-shopee-ui') {
+      sendResponse({ ok: true, result: diagnoseShopeeUi() });
+      return true;
+    }
 
-let latestCollectedProduct;
-const productCardCache = new Map();
+    if (message?.type === 'repair-shopee-ui') {
+      repairShopeeUi();
+      sendResponse({ ok: true, result: diagnoseShopeeUi() });
+      return true;
+    }
+
+    return false;
+  });
+  globalThis.__shopeeAiCollectorListenerInstalled = true;
+}
+
+var latestCollectedProduct = globalThis.__shopeeAiLatestCollectedProduct;
+var productCardCache = globalThis.__shopeeAiProductCardCache || new Map();
+globalThis.__shopeeAiProductCardCache = productCardCache;
 
 initShopeeCollectorPanel();
 initProductCardTools();
@@ -970,16 +985,20 @@ function initShopeeCollectorPanel() {
     .slpc-dot.idle { background: #64748b; }
     .slpc-media { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
     .slpc-media img { border-radius: 6px; height: 42px; object-fit: cover; width: 42px; }
+    .slpc-card-tools-host { overflow: visible !important; }
     .slpc-card-tools {
       align-items: center;
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
       left: 6px;
+      max-width: calc(100% - 12px);
+      pointer-events: auto;
       position: absolute;
       right: auto;
       top: 6px;
-      z-index: 50;
+      visibility: visible !important;
+      z-index: 2147483000;
     }
     .slpc-card-tools button {
       background: rgba(238,77,45,.96);
@@ -991,19 +1010,37 @@ function initShopeeCollectorPanel() {
       font: 600 11px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       min-height: 24px;
       padding: 6px 8px;
+      pointer-events: auto;
+      text-shadow: none;
     }
     .slpc-card-tools button.slpc-good { background: rgba(31,138,91,.96); }
+    .slpc-card-tools button.slpc-fb { background: rgba(37,99,235,.96); }
     .slpc-card-tools button.slpc-muted { background: rgba(51,65,85,.92); }
     .slpc-card-tools button:disabled { cursor: wait; opacity: .78; }
     .slpc-detail-tools {
       align-items: center;
+      background: rgba(255,255,255,.96);
+      border: 1px solid rgba(18,28,45,.12);
+      border-radius: 8px;
+      box-shadow: 0 8px 22px rgba(18,28,45,.12);
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
       margin: 10px 0 8px;
       max-width: 100%;
+      padding: 7px;
+      pointer-events: auto;
       position: relative;
-      z-index: 20;
+      visibility: visible !important;
+      z-index: 2147483000;
+    }
+    .slpc-detail-tools-floating {
+      bottom: 104px;
+      left: 18px;
+      max-width: min(560px, calc(100vw - 32px));
+      position: fixed;
+      right: auto;
+      z-index: 2147483000;
     }
     .slpc-detail-tools button {
       background: #ee4d2d;
@@ -1017,12 +1054,14 @@ function initShopeeCollectorPanel() {
       white-space: nowrap;
     }
     .slpc-detail-tools button.slpc-good { background: #1f8a5b; }
+    .slpc-detail-tools button.slpc-fb { background: #2563eb; }
     .slpc-detail-tools button.slpc-muted { background: #334155; }
     .slpc-detail-tools button:disabled { cursor: wait; opacity: .78; }
     @media (max-width: 760px) {
       #slpc-panel { bottom: 72px; right: 10px; width: min(300px, calc(100vw - 20px)); }
       .slpc-row { grid-template-columns: 1fr 1fr; }
       .slpc-detail-tools { gap: 5px; }
+      .slpc-detail-tools-floating { bottom: 122px; left: 10px; right: 10px; }
       .slpc-detail-tools button { font-size: 11px; min-height: 26px; padding: 6px 8px; }
     }
   `;
@@ -1052,6 +1091,42 @@ function initShopeeCollectorPanel() {
   setInterval(initProductDetailTools, 1500);
 }
 
+function diagnoseShopeeUi() {
+  const ids = extractProductIds(location.href);
+  return {
+    url: location.href,
+    title: document.title,
+    contentVersion: chrome.runtime.getManifest?.().version || '',
+    isShopee: /shopee\.vn/i.test(location.hostname),
+    isProductPage: Boolean(ids?.itemId),
+    shopId: ids?.shopId || '',
+    itemId: ids?.itemId || '',
+    panelExists: Boolean(document.getElementById('slpc-panel')),
+    panelCollapsed: Boolean(document.getElementById('slpc-panel')?.classList.contains('slpc-collapsed')),
+    detailToolbarExists: Boolean(document.getElementById('slpc-detail-tools')),
+    detailToolButtons: document.querySelectorAll('#slpc-detail-tools button').length,
+    detailToolbarText: normalizeText(document.getElementById('slpc-detail-tools')?.textContent || ''),
+    cardToolbars: document.querySelectorAll('.slpc-card-tools').length,
+    cardToolButtons: document.querySelectorAll('.slpc-card-tools button').length,
+    visibleCardToolbars: [...document.querySelectorAll('.slpc-card-tools')].filter(isVisibleElement).length,
+    productAnchors: document.querySelectorAll('a[href*="-i."], a[href*="/product/"]').length,
+    bodyReady: Boolean(document.body),
+  };
+}
+
+function repairShopeeUi() {
+  document.getElementById('slpc-panel')?.remove();
+  document.getElementById('slpc-detail-tools')?.remove();
+  document.querySelectorAll('.slpc-card-tools').forEach((node) => node.remove());
+  document.querySelectorAll('[data-slpc-tools]').forEach((node) => {
+    delete node.dataset.slpcTools;
+    node.classList.remove('slpc-card-tools-host');
+  });
+  initShopeeCollectorPanel();
+  initProductCardTools();
+  initProductDetailTools();
+}
+
 function initProductDetailTools() {
   if (!/shopee\.vn/i.test(location.hostname)) return;
 
@@ -1066,12 +1141,9 @@ function initProductDetailTools() {
   if (existing?.dataset.productKey === key) return;
   existing?.remove();
 
-  const mount = findProductDetailToolbarMount();
-  if (!mount) return;
-
   const toolbar = document.createElement('div');
   toolbar.id = 'slpc-detail-tools';
-  toolbar.className = 'slpc-detail-tools';
+  toolbar.className = 'slpc-detail-tools slpc-detail-tools-floating';
   toolbar.dataset.productKey = key;
   toolbar.innerHTML = `
     <button class="slpc-muted" data-slpc-detail-action="copy-name" title="Copy product name">Tên</button>
@@ -1079,6 +1151,7 @@ function initProductDetailTools() {
     <button class="slpc-muted" data-slpc-detail-action="copy-id" title="Copy shopId.itemId">ID</button>
     <button class="slpc-muted" data-slpc-detail-action="copy-link" title="Copy canonical product link">Link</button>
     <button data-slpc-detail-action="affiliate" title="Create affiliate link and copy it">Aff</button>
+    <button class="slpc-fb" data-slpc-detail-action="facebook-wrap" title="Create affiliate link, queue Facebook post, then collect the Facebook-wrapped Shopee link">FB wrap</button>
     <button class="slpc-good" data-slpc-detail-action="images" title="Download all product images">Ảnh</button>
     <button class="slpc-good" data-slpc-detail-action="videos" title="Download product videos">Video</button>
   `;
@@ -1089,7 +1162,7 @@ function initProductDetailTools() {
     event.stopPropagation();
     handleProductDetailAction(button.dataset.slpcDetailAction, button);
   });
-  mount.insertAdjacentElement('afterend', toolbar);
+  document.documentElement.appendChild(toolbar);
 }
 
 function findProductDetailToolbarMount() {
@@ -1178,6 +1251,7 @@ function initProductCardTools() {
     if (!card || card.dataset.slpcTools === ids.itemId) continue;
 
     card.dataset.slpcTools = ids.itemId;
+    card.classList.add('slpc-card-tools-host');
     if (getComputedStyle(card).position === 'static') {
       card.style.position = 'relative';
     }
@@ -1190,6 +1264,7 @@ function initProductCardTools() {
       <button class="slpc-muted" data-slpc-action="copy-link" title="Copy product link">Link</button>
       <button class="slpc-muted" data-slpc-action="copy-name" title="Copy product name">Tên</button>
       <button data-slpc-action="affiliate" title="Create affiliate link and copy it">Aff</button>
+      <button class="slpc-fb" data-slpc-action="facebook-wrap" title="Create affiliate link and queue Facebook wrap job">FB</button>
       <button class="slpc-good" data-slpc-action="images" title="Download all product images">Ảnh</button>
       <button class="slpc-good" data-slpc-action="videos" title="Download product videos">Video</button>
     `;
@@ -1267,6 +1342,19 @@ async function handleProductCardAction(action, item, button) {
       return;
     }
 
+    if (action === 'facebook-wrap') {
+      const response = await sendRuntimeMessage({ type: 'create-facebook-wrap-product-url', url: item.url });
+      if (!response?.ok) throw new Error(response?.error || 'Facebook wrap failed.');
+      const shortLink = response.result?.affiliateLink?.links?.[0]?.shortLink;
+      if (shortLink) await navigator.clipboard.writeText(shortLink);
+      latestCollectedProduct = response.result.productData;
+      productCardCache.set(item.url, response.result.productData);
+      button.textContent = response.result?.facebookJob?.id ? `#${response.result.facebookJob.id}` : 'Queued';
+      showShopeeAiNotice(`Facebook wrap job created${response.result?.facebookJob?.id ? `: ${response.result.facebookJob.id}` : ''}. Affiliate link copied.`);
+      renderCollectorPanel();
+      return;
+    }
+
     const product = await collectProductFromCardUrl(item);
     const items = action === 'images'
       ? mediaDownloadItems(product.images || [item.image].filter(Boolean), product.name || item.title, 'image')
@@ -1277,6 +1365,7 @@ async function handleProductCardAction(action, item, button) {
     button.textContent = String(items.length);
   } catch (error) {
     button.textContent = 'Err';
+    showShopeeAiNotice(error.message || 'Action failed.', true);
     console.warn('[shopeeAI]', error);
   } finally {
     setTimeout(() => {
@@ -1336,6 +1425,18 @@ async function handleProductDetailAction(action, button) {
       return;
     }
 
+    if (action === 'facebook-wrap') {
+      const response = await sendRuntimeMessage({ type: 'create-facebook-wrap-current-product' });
+      if (!response?.ok) throw new Error(response?.error || 'Facebook wrap failed.');
+      latestCollectedProduct = response.result.productData || product;
+      const shortLink = response.result?.affiliateLink?.links?.[0]?.shortLink;
+      if (shortLink) await navigator.clipboard.writeText(shortLink);
+      button.textContent = response.result?.facebookJob?.id ? `#${response.result.facebookJob.id}` : 'Queued';
+      showShopeeAiNotice(`Facebook wrap job created${response.result?.facebookJob?.id ? `: ${response.result.facebookJob.id}` : ''}. Affiliate link copied.`);
+      renderCollectorPanel();
+      return;
+    }
+
     const urls = action === 'images'
       ? product.images || []
       : (product.videos || []).map((video) => video.url).filter(Boolean);
@@ -1346,6 +1447,7 @@ async function handleProductDetailAction(action, button) {
     button.textContent = String(items.length);
   } catch (error) {
     button.textContent = 'Err';
+    showShopeeAiNotice(error.message || 'Action failed.', true);
     console.warn('[shopeeAI]', error);
   } finally {
     setTimeout(() => {
@@ -1410,10 +1512,12 @@ async function renderCollectorPanel() {
     </div>
     <div class="slpc-row">
       <button class="slpc-btn" id="slpc-collect">Collect</button>
+      <button class="slpc-btn" id="slpc-ai-fix">AI fix</button>
       <button class="slpc-btn muted" id="slpc-poll">Poll</button>
       <button class="slpc-btn alt" id="slpc-copy">Copy</button>
       <button class="slpc-btn alt" id="slpc-copy-product-link">Copy link</button>
       <button class="slpc-btn" id="slpc-affiliate">Get affiliate</button>
+      <button class="slpc-btn" id="slpc-facebook-wrap">FB wrap</button>
       <button class="slpc-btn muted" id="slpc-manager">Open manager</button>
       <button class="slpc-btn alt" id="slpc-download-images">Download images (${imageCount})</button>
       <button class="slpc-btn alt" id="slpc-download-videos">Videos (${videoCount})</button>
@@ -1437,6 +1541,13 @@ async function renderCollectorPanel() {
     if (response.ok) latestCollectedProduct = response.result;
     renderCollectorPanel();
   });
+  body.querySelector('#slpc-ai-fix').addEventListener('click', async () => {
+    const response = await sendRuntimeMessage({ type: 'run-ai-fix' });
+    const issues = response?.result?.analysis?.issues || [];
+    await navigator.clipboard.writeText(JSON.stringify(response?.result || response, null, 2)).catch(() => {});
+    window.alert(`shopeeAI AI fix\n\n${issues.slice(0, 4).join('\n') || 'Done.'}`);
+    renderCollectorPanel();
+  });
   body.querySelector('#slpc-poll').addEventListener('click', async () => {
     await sendRuntimeMessage({ type: 'poll-now' });
     renderCollectorPanel();
@@ -1455,6 +1566,18 @@ async function renderCollectorPanel() {
       latestCollectedProduct = response.result.productData;
       const shortLink = response.result.affiliateLink?.links?.[0]?.shortLink;
       if (shortLink) await navigator.clipboard.writeText(shortLink);
+    }
+    renderCollectorPanel();
+  });
+  body.querySelector('#slpc-facebook-wrap').addEventListener('click', async () => {
+    const response = await sendRuntimeMessage({ type: 'create-facebook-wrap-current-product' });
+    if (response.ok) {
+      latestCollectedProduct = response.result.productData;
+      const shortLink = response.result.affiliateLink?.links?.[0]?.shortLink;
+      if (shortLink) await navigator.clipboard.writeText(shortLink);
+      showShopeeAiNotice(`Facebook wrap job created${response.result?.facebookJob?.id ? `: ${response.result.facebookJob.id}` : ''}. Affiliate link copied.`);
+    } else {
+      showShopeeAiNotice(response?.error || 'Facebook wrap failed.', true);
     }
     renderCollectorPanel();
   });
@@ -1530,6 +1653,36 @@ function mediaDownloadItems(urls, name, type) {
     url,
     filename: `${slug}-${type}-${String(index + 1).padStart(2, '0')}`,
   }));
+}
+
+function showShopeeAiNotice(message, isError = false) {
+  let notice = document.getElementById('slpc-notice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.id = 'slpc-notice';
+    notice.style.cssText = [
+      'position:fixed',
+      'right:18px',
+      'bottom:26px',
+      'z-index:2147483647',
+      'max-width:min(420px,calc(100vw - 32px))',
+      'border-radius:9px',
+      'box-shadow:0 12px 32px rgba(18,28,45,.22)',
+      'color:#fff',
+      'font:13px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+      'padding:10px 12px',
+      'white-space:pre-wrap',
+      'overflow-wrap:anywhere',
+    ].join(';');
+    document.documentElement.appendChild(notice);
+  }
+  notice.textContent = message;
+  notice.style.background = isError ? '#cf2f2f' : '#168457';
+  notice.style.display = 'block';
+  clearTimeout(showShopeeAiNotice.timer);
+  showShopeeAiNotice.timer = setTimeout(() => {
+    notice.style.display = 'none';
+  }, isError ? 8500 : 4500);
 }
 
 function escapeHtml(value) {

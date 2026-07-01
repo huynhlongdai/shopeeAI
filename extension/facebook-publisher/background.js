@@ -80,16 +80,22 @@ async function pollJobs() {
   try {
     const tab = await openTargetTab(job.targetUrl);
     const prepareResponse = await preparePostInTab(tab.id, job);
+    if (prepareResponse?.ok === false) {
+      throw new Error(prepareResponse.error || 'Facebook content script failed.');
+    }
     const publishResult = prepareResponse?.result || prepareResponse || {};
 
-    if (publishResult.published && publishResult.facebookPostUrl) {
+    if (publishResult.completed || publishResult.commented || (publishResult.published && publishResult.facebookPostUrl)) {
       const completeBody = {
         profileId: settings.profileId,
         extensionVersion: chrome.runtime.getManifest().version,
-        status: 'published',
+        status: publishResult.status || (publishResult.commented ? 'commented' : 'published'),
         targetUrl: job.targetUrl,
         publishMode: job.publishMode,
         facebookPostUrl: publishResult.facebookPostUrl || '',
+        commentUrl: publishResult.commentUrl || '',
+        facebookShopeeLinks: publishResult.facebookShopeeLinks || [],
+        facebookWrappedShopeeLink: publishResult.facebookWrappedShopeeLink || '',
         note: publishResult.note || 'Facebook post was published by the extension.',
       };
       await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/complete`, {
@@ -125,6 +131,10 @@ async function pollJobs() {
 
 async function preparePostInTab(tabId, job) {
   try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content.js'],
+    });
     return await chrome.tabs.sendMessage(tabId, { type: 'prepare-facebook-post', job });
   } catch (error) {
     await chrome.scripting.executeScript({
@@ -148,7 +158,10 @@ async function openTargetTab(url) {
   const existing = (await chrome.tabs.query({ url: 'https://www.facebook.com/*' }))
     .find((tab) => tab.url && normalizeUrl(tab.url) === normalizeUrl(url));
   const tab = existing || await chrome.tabs.create({ url, active: true });
-  if (existing) await chrome.tabs.update(existing.id, { active: true });
+  if (existing) {
+    await chrome.tabs.update(existing.id, { active: true });
+    await chrome.tabs.reload(existing.id);
+  }
   await waitForTabComplete(tab.id);
   return chrome.tabs.get(tab.id);
 }

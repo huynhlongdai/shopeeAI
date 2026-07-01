@@ -17,6 +17,8 @@
       </div>
       <div class="top-actions">
         <span id="serverStatus" class="pill">Checking</span>
+        <button id="runAiFix">AI fix</button>
+        <button id="runAiDiagnostics" class="ghost">Diagnose</button>
         <button id="checkServer" class="ghost">Check server</button>
         <button id="runQueue">Run queue</button>
         <button id="openApiDocs" class="ghost">API docs</button>
@@ -25,6 +27,17 @@
     </header>
 
     <main class="shell">
+      <section class="card ai-card">
+        <div class="section-head">
+          <div>
+            <h2>AI Diagnostics</h2>
+            <p class="muted">Self-check extension injection, Shopee buttons, server, queue, and common recovery actions.</p>
+          </div>
+          <span id="aiStatus" class="pill">Idle</span>
+        </div>
+        <div id="aiSummary" class="ai-summary">Run Diagnose or AI fix when buttons/panel do not appear on Shopee.</div>
+      </section>
+
       <section class="workbench">
         <section class="card">
           <div class="card-head">
@@ -38,6 +51,7 @@
               <option value="product-links">Product links</option>
               <option value="affiliate-links">Affiliate links only</option>
               <option value="facebook-post">Facebook post</option>
+              <option value="facebook-comment">Facebook comment</option>
             </select>
           </label>
           <label>Product or listing URL
@@ -82,9 +96,9 @@
             <div class="grid-2-even">
               <label>Publish mode
                 <select id="facebookPublishMode">
+                  <option value="auto">Auto</option>
                   <option value="draft">Draft</option>
                   <option value="confirm">Confirm</option>
-                  <option value="auto">Auto</option>
                   <option value="manual">Manual</option>
                 </select>
               </label>
@@ -94,6 +108,15 @@
             </div>
             <label>Caption template
               <textarea id="facebookCaption" rows="4" placeholder="{name}\n\nGiá: {salePrice}\nLink mua: {affiliateLink}"></textarea>
+            </label>
+            <label>Comment target post URLs
+              <textarea id="facebookCommentPostUrls" rows="4" placeholder="https://www.facebook.com/page/posts/...\nhttps://www.facebook.com/page/posts/..."></textarea>
+            </label>
+            <label>Comment target mode
+              <select id="facebookCommentMode">
+                <option value="specific">Specific / first configured post</option>
+                <option value="random">Random from configured list</option>
+              </select>
             </label>
           </section>
           <button id="createJob" class="primary wide-btn">Create job</button>
@@ -153,6 +176,8 @@
             <button id="downloadImages" class="secondary">Download images</button>
             <button id="downloadVideos" class="secondary">Download videos</button>
             <button id="createFacebookJob" class="secondary">Create FB job</button>
+            <button id="createFacebookWrapJob" class="secondary">Create FB wrap</button>
+            <button id="copyFacebookWrappedLink" class="secondary">Copy FB Shopee link</button>
           </div>
         </section>
         <section class="card result-card json-result">
@@ -189,6 +214,18 @@
         </label>
         <label>Default Facebook target URL
           <input id="settingsFacebookTargetUrl" autocomplete="off" placeholder="https://www.facebook.com/page">
+        </label>
+        <div class="grid-2-even">
+          <label>Facebook profile ID
+            <input id="facebookProfileId" autocomplete="off" placeholder="facebook-profile-1">
+          </label>
+          <label>Facebook profile name
+            <input id="facebookProfileName" autocomplete="off" placeholder="Facebook Profile 1">
+          </label>
+        </div>
+        <label class="check">
+          <input id="facebookPublisherEnabled" type="checkbox">
+          <span>Auto-run Facebook publisher queue in shopeeAI</span>
         </label>
         <div class="grid-2-even">
           <label>Profile ID
