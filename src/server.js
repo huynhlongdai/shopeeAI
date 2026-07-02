@@ -1447,6 +1447,8 @@ function summarizeFacebookJob(job) {
       name: job.result?.facebookPostUrl || job.result?.commentUrl || job.affiliateLink || '',
       affiliateLink: job.affiliateLink || job.result?.affiliateLink || '',
       facebookPostUrl: job.result?.facebookPostUrl || '',
+      visibleShopeeLink: job.result?.visibleShopeeLink || '',
+      facebookTrackedShopeeLink: job.result?.facebookTrackedShopeeLink || '',
       facebookWrappedShopeeLink: job.result?.facebookWrappedShopeeLink || '',
     },
     error: job.error || '',
@@ -1510,6 +1512,8 @@ function summarizeJobResultPreview(result) {
     offerAvailable: affiliateOffer?.available,
     affiliateLink,
     facebookPostUrl: result.facebookPostUrl || '',
+    visibleShopeeLink: result.visibleShopeeLink || '',
+    facebookTrackedShopeeLink: result.facebookTrackedShopeeLink || '',
     facebookWrappedShopeeLink: result.facebookWrappedShopeeLink || '',
   };
 }

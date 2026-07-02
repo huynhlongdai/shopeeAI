@@ -519,7 +519,7 @@ Tạo job đăng/draft bài Facebook từ Shopee affiliate link cho extension `f
 
 `targetUrl` có thể lấy từ job, setting extension, hoặc setting server. `publishMode` gồm `manual`, `draft`, `confirm`, `auto`.
 
-Khi `publishMode = auto`, extension Facebook Publisher sẽ mở target Facebook, tìm composer, điền caption/link, bấm Post, rồi cố gắng phát hiện URL bài vừa đăng. Nếu phát hiện được `facebookPostUrl`, job được chuyển sang `published` và server trả `result.embeddedPost`. Nếu Facebook đã nhận click đăng nhưng chưa expose URL bài viết, job chuyển sang `published_pending_url` để tránh trả nhầm embedded của bài cũ.
+Khi `publishMode = auto`, extension Facebook Publisher sẽ mở target Facebook, tìm composer, điền caption/link, xác minh composer đã có nội dung rồi mới bấm Post, sau đó cố gắng phát hiện URL bài vừa đăng. Nếu phát hiện được `facebookPostUrl`, job được chuyển sang `published` và server trả `result.embeddedPost`. Nếu Facebook đã nhận click đăng nhưng chưa expose URL bài viết, job chuyển sang `published_pending_url` để tránh trả nhầm embedded của bài cũ.
 
 Facebook-wrap affiliate flow:
 
@@ -537,6 +537,8 @@ Facebook-wrap affiliate flow:
 Sau khi publish, extension cố lấy các link Shopee xuất hiện trong bài Facebook. Kết quả nằm ở:
 
 - `result.facebookPostUrl`
+- `result.visibleShopeeLink`: link Shopee đang hiển thị trong nội dung bài viết.
+- `result.facebookTrackedShopeeLink`: `href` thật khi hover/click link trên Facebook, gồm các query tracking như `content_source`, `fb_content_id`, `encrypted_payload`.
 - `result.facebookWrappedShopeeLink`
 - `result.facebookShopeeLinks[]`
 

@@ -114,7 +114,8 @@ function renderPublisherPanel(job) {
 async function autoCommentOnFacebookPost(job) {
   updatePanelStatus('Auto mode: finding Facebook comment box...');
   const commentBox = await waitForElement(findCommentTextbox, 15000, 'Facebook comment textbox not found.');
-  setComposerText(commentBox, normalizePostText(job.commentText || job.caption || job.affiliateLink || ''));
+  const commentText = normalizePostText(job.commentText || job.caption || job.affiliateLink || '');
+  await fillComposerText(commentBox, commentText);
   await sleep(1000);
 
   updatePanelStatus('Submitting comment...');
@@ -139,26 +140,33 @@ async function autoCommentOnFacebookPost(job) {
 async function autoPublishFacebookPost(job) {
   updatePanelStatus('Auto mode: opening Facebook composer...');
   const existingUrls = collectFacebookPostUrls();
+  const existingShopeeLinkKeys = new Set(collectFacebookShopeeLinks(job.affiliateLink).map(linkIdentity));
   await openComposer();
 
   updatePanelStatus('Filling caption...');
   const textbox = await waitForElement(findComposerTextbox, 15000, 'Facebook composer textbox not found.');
-  setComposerText(textbox, normalizePostText(job.caption || job.affiliateLink || ''));
+  const caption = normalizePostText(job.caption || job.affiliateLink || '');
+  await fillComposerText(textbox, caption);
   await sleep(1200);
 
   updatePanelStatus('Advancing Facebook publish flow...');
-  await advancePublishFlow();
+  await advancePublishFlow(caption);
 
   updatePanelStatus('Waiting for Facebook post URL...');
   const facebookPostUrl = await waitForPostUrl(existingUrls, 35000).catch(() => '');
   if (facebookPostUrl) {
-    const facebookShopeeLinks = collectFacebookShopeeLinks(job.affiliateLink);
+    const facebookShopeeLinks = await waitForFacebookShopeeLinks(job.affiliateLink, existingShopeeLinkKeys, 45000)
+      .catch(() => collectFacebookShopeeLinks(job.affiliateLink).filter((row) => !existingShopeeLinkKeys.has(linkIdentity(row))));
+    const primaryShopeeLink = facebookShopeeLinks[0] || {};
     updatePanelStatus(`Published: ${facebookPostUrl}`);
     return {
       published: true,
       facebookPostUrl,
       facebookShopeeLinks,
-      facebookWrappedShopeeLink: facebookShopeeLinks[0]?.url || '',
+      visibleShopeeLink: primaryShopeeLink.visibleShopeeLink || '',
+      facebookTrackedShopeeLink: primaryShopeeLink.facebookTrackedShopeeLink || primaryShopeeLink.url || '',
+      facebookWrappedShopeeLink: primaryShopeeLink.facebookTrackedShopeeLink || primaryShopeeLink.url || '',
+      cleanShopeeLink: primaryShopeeLink.cleanShopeeLink || primaryShopeeLink.targetUrl || '',
       note: 'Auto-published and post URL detected.',
     };
   }
@@ -202,12 +210,60 @@ function findCommentTextbox() {
     || boxes.at(-1);
 }
 
-function setComposerText(textbox, text) {
+async function fillComposerText(textbox, text) {
+  const normalizedText = normalizePostText(text);
+  if (!normalizedText) throw new Error('Facebook caption/comment is empty.');
+
   textbox.focus();
+  await sleep(150);
+
   document.execCommand('selectAll', false, null);
-  document.execCommand('insertText', false, text);
+  document.execCommand('delete', false, null);
+  document.execCommand('insertText', false, normalizedText);
+  dispatchComposerInputEvents(textbox, normalizedText);
+  if (await waitForComposerText(textbox, normalizedText, 1600).catch(() => false)) return true;
+
+  await navigator.clipboard.writeText(normalizedText).catch(() => {});
+  textbox.focus();
+  await sleep(100);
+  document.execCommand('selectAll', false, null);
+  document.execCommand('delete', false, null);
+  document.execCommand('paste', false, null);
+  dispatchComposerInputEvents(textbox, normalizedText);
+  if (await waitForComposerText(textbox, normalizedText, 1600).catch(() => false)) return true;
+
+  textbox.focus();
+  textbox.textContent = normalizedText;
+  dispatchComposerInputEvents(textbox, normalizedText);
+  if (await waitForComposerText(textbox, normalizedText, 1600).catch(() => false)) return true;
+
+  throw new Error('Facebook composer did not receive the caption. Publish was stopped before clicking Post.');
+}
+
+function dispatchComposerInputEvents(textbox, text) {
+  textbox.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, inputType: 'insertText', data: text }));
   textbox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
   textbox.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function waitForComposerText(textbox, expectedText, timeoutMs) {
+  return waitForElement(() => composerContainsExpectedText(textbox, expectedText), timeoutMs, 'Facebook composer text was not inserted.');
+}
+
+function composerContainsExpectedText(textbox, expectedText) {
+  const actual = normalizeText(textbox.innerText || textbox.textContent || '');
+  const expected = normalizeText(expectedText);
+  if (!actual || !expected) return false;
+  if (actual.includes(expected)) return true;
+
+  const expectedShopeeLink = extractShopeeUrlFromText(expected);
+  if (expectedShopeeLink && actual.includes(expectedShopeeLink)) return true;
+
+  const meaningfulWords = expected
+    .split(/\s+/)
+    .filter((word) => word.length >= 4 && !/^https?:\/\//i.test(word))
+    .slice(0, 4);
+  return meaningfulWords.length > 0 && meaningfulWords.every((word) => actual.includes(word));
 }
 
 function findEnabledPostButton() {
@@ -252,19 +308,30 @@ function normalizePostText(value) {
   return String(value || '').replace(/\\n/g, '\n');
 }
 
-async function advancePublishFlow() {
+async function advancePublishFlow(expectedText) {
   const directPostButton = findEnabledPostButton();
   if (directPostButton) {
+    assertAnyComposerContainsText(expectedText);
     directPostButton.click();
     return;
   }
 
   const nextButton = await waitForElement(findEnabledNextButton, 15000, 'Facebook Next button not found or still disabled.');
+  assertAnyComposerContainsText(expectedText);
   nextButton.click();
   await sleep(1800);
 
   const postButton = await waitForElement(findEnabledPostButton, 15000, 'Facebook Post button not found after Next.');
+  assertAnyComposerContainsText(expectedText, { allowMissingComposer: true });
   postButton.click();
+}
+
+function assertAnyComposerContainsText(expectedText, options = {}) {
+  const boxes = visibleElements('[role="dialog"] [role="textbox"][contenteditable="true"], [role="dialog"] div[contenteditable="true"], [role="textbox"][contenteditable="true"]')
+    .filter((node) => !node.closest('#saifb-panel'));
+  if (!boxes.length && options.allowMissingComposer) return;
+  if (boxes.some((box) => composerContainsExpectedText(box, expectedText))) return;
+  throw new Error('Facebook composer is empty or missing expected content. Publish was stopped before clicking Post.');
 }
 
 async function waitForPostUrl(existingUrls, timeoutMs) {
@@ -287,16 +354,22 @@ function collectFacebookShopeeLinks(affiliateLink = '') {
   const wanted = normalizeShopeeComparableUrl(affiliateLink);
   const rows = [...document.querySelectorAll('a[href]')]
     .map((anchor) => {
-      const url = anchor.href || '';
+      const url = new URL(anchor.getAttribute('href') || '', location.href).toString();
       const targetUrl = extractFacebookOutboundUrl(url);
+      const text = normalizeText(anchor.textContent);
+      const visibleShopeeLink = extractShopeeUrlFromText(text);
+      const cleanShopeeLink = normalizeShopeeComparableUrl(targetUrl || url || visibleShopeeLink);
       return {
         url,
+        facebookTrackedShopeeLink: url,
         targetUrl,
-        text: normalizeText(anchor.textContent),
+        cleanShopeeLink,
+        visibleShopeeLink,
+        text,
       };
     })
     .filter((row) => {
-      const comparable = normalizeShopeeComparableUrl(row.targetUrl || row.url);
+      const comparable = normalizeShopeeComparableUrl(row.targetUrl || row.url || row.visibleShopeeLink);
       if (!comparable) return false;
       return !wanted || comparable === wanted || comparable.includes(wanted) || wanted.includes(comparable);
     });
@@ -308,6 +381,21 @@ function collectFacebookShopeeLinks(affiliateLink = '') {
     seen.add(key);
     return true;
   });
+}
+
+function waitForFacebookShopeeLinks(affiliateLink, existingKeys, timeoutMs) {
+  return waitForElement(() => {
+    const rows = collectFacebookShopeeLinks(affiliateLink).filter((row) => !existingKeys.has(linkIdentity(row)));
+    return rows.length ? rows : null;
+  }, timeoutMs, 'Facebook tracked Shopee link was not found.');
+}
+
+function linkIdentity(row) {
+  return row?.facebookTrackedShopeeLink || row?.url || row?.targetUrl || row?.visibleShopeeLink || '';
+}
+
+function extractShopeeUrlFromText(value) {
+  return String(value || '').match(/https?:\/\/(?:[^/\s]+\.)?(?:shopee\.vn|s\.shopee\.vn|shope\.ee)[^\s<>"')]+/i)?.[0] || '';
 }
 
 function extractFacebookOutboundUrl(value) {

@@ -284,7 +284,10 @@ async function pollFacebookJobs() {
         facebookPostUrl: publishResult.facebookPostUrl || '',
         commentUrl: publishResult.commentUrl || '',
         facebookShopeeLinks: publishResult.facebookShopeeLinks || [],
+        visibleShopeeLink: publishResult.visibleShopeeLink || '',
+        facebookTrackedShopeeLink: publishResult.facebookTrackedShopeeLink || '',
         facebookWrappedShopeeLink: publishResult.facebookWrappedShopeeLink || '',
+        cleanShopeeLink: publishResult.cleanShopeeLink || '',
         note: publishResult.note || 'Facebook post was published by shopeeAI.',
       };
       await apiFetch(settings, `/api/social/facebook/jobs/${encodeURIComponent(job.id)}/complete`, {

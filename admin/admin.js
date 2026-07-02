@@ -42,6 +42,7 @@ const els = {
   copyDescription: document.querySelector('#copyDescription'),
   copyProductLink: document.querySelector('#copyProductLink'),
   copyAffiliateLink: document.querySelector('#copyAffiliateLink'),
+  copyFacebookTrackedLink: document.querySelector('#copyFacebookTrackedLink'),
   downloadImages: document.querySelector('#downloadImages'),
   downloadVideos: document.querySelector('#downloadVideos'),
   profileGrid: document.querySelector('#profileGrid'),
@@ -64,6 +65,7 @@ function init() {
   els.copyDescription.addEventListener('click', () => copyText(getSelectedProduct()?.description || ''));
   els.copyProductLink.addEventListener('click', () => copyText(getSelectedProductUrl()));
   els.copyAffiliateLink.addEventListener('click', () => copyText(getAffiliateLink(state.selectedJob)));
+  els.copyFacebookTrackedLink.addEventListener('click', () => copyText(getFacebookTrackedLink(state.selectedJob)));
   els.downloadImages.addEventListener('click', () => downloadMedia('images'));
   els.downloadVideos.addEventListener('click', () => downloadMedia('videos'));
   refreshAll();
@@ -157,6 +159,8 @@ function renderResult(job) {
     ['Offer status', offer?.status || (offer?.available === false ? 'Unavailable' : '')],
     ['Affiliate', getAffiliateLink(job), true],
     ['Facebook post', job.result?.facebookPostUrl || '', true],
+    ['Visible Shopee link', job.result?.visibleShopeeLink || '', true],
+    ['Facebook tracked link', getFacebookTrackedLink(job), true],
     ['FB Shopee link', job.result?.facebookWrappedShopeeLink || '', true],
     ['Description', product?.description || '', true],
   ].filter(([, value]) => value !== undefined && value !== null && value !== '');
@@ -311,6 +315,15 @@ function getAffiliateLink(job = state.selectedJob) {
     || result.affiliateLink?.shortLink
     || result.links?.[0]?.shortLink
     || result.facebookWrappedShopeeLink
+    || '';
+}
+
+function getFacebookTrackedLink(job = state.selectedJob) {
+  const result = job?.result || {};
+  return result.facebookTrackedShopeeLink
+    || result.facebookWrappedShopeeLink
+    || result.facebookShopeeLinks?.[0]?.facebookTrackedShopeeLink
+    || result.facebookShopeeLinks?.[0]?.url
     || '';
 }
 
