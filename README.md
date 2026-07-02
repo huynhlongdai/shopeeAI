@@ -6,7 +6,7 @@ Luồng này dùng profile trình duyệt riêng để đăng nhập Shopee Affi
 
 Agent hỗ trợ MCP có thể dùng `npm run mcp` sau khi API đã chạy. Xem `MCP_SERVER.md`.
 
-Tài liệu API đầy đủ nằm ở `API_DOCS.md`. Trong extension manager cũng có menu `API docs` để xem nhanh endpoint, body mẫu, và flow khuyến nghị.
+Tài liệu API đầy đủ nằm ở `API_DOCS.md`. Giao diện quản trị chính chạy trên server tại `http://127.0.0.1:8787/admin/`; extension chỉ đóng vai trò bridge/worker trong Chrome thật.
 
 Ý tưởng mở rộng thành hệ thống analytics kiểu "Shopdora mini" được phân tích trong `SHOPEEAI_ANALYTICS_BLUEPRINT.md`.
 
@@ -47,6 +47,12 @@ Health check:
 
 ```bash
 curl http://localhost:8787/health
+```
+
+Admin UI:
+
+```text
+http://127.0.0.1:8787/admin/
 ```
 
 Tạo link:
@@ -127,6 +133,8 @@ Response có:
 - `product`: tên, ảnh, giá hiện tại, giá trước giảm, tồn kho, lượt bán, rating.
 - `affiliateOffer`: mức hoa hồng và trạng thái offer nếu Shopee Affiliate trả dữ liệu cho sản phẩm đó.
 
+Nếu chỉ cần hoa hồng/commission, dùng Admin UI chọn job type `Commission only` hoặc gọi `POST /api/shopee/extension/affiliate-offer`. Endpoint trực tiếp `GET/POST /api/shopee/affiliate-offer` hỗ trợ `itemId` hoặc URL sản phẩm và có cache offer.
+
 Với link rút gọn/mobile, server sẽ mở link trong browser profile để lấy URL đích rồi mới tách `shop_id` và `item_id`.
 
 ## Thu thập dữ liệu sản phẩm đầy đủ
@@ -143,13 +151,13 @@ Khuyến nghị dùng extension ở `extension/shopee-collector` để thu thậ
    - API Base: `http://127.0.0.1:8787`
    - API Token: token trong `.env`, mặc định `change-me`
 
-Popup extension có nút `Open manager`. Trang manager cho phép cấu hình API, tạo job, chạy queue, retry/cancel/clear job, xem kết quả JSON, copy kết quả, copy link sản phẩm, copy affiliate link và tải ảnh/video. Các tab Shopee/Affiliate do job tự mở sẽ tự đóng sau khi job hoàn tất.
+Popup extension có nút `Open admin` để mở giao diện quản trị server. Tạo job, quản lý queue, xem kết quả JSON, copy link, tải ảnh/video và theo dõi batch/profile nên thao tác trong Admin UI để extension nhẹ hơn. Các tab Shopee/Affiliate do job tự mở sẽ tự đóng sau khi job hoàn tất.
 
 ### Nhiều Chrome profile
 
 Bạn có thể cài extension trên nhiều Chrome profile/tài khoản Shopee khác nhau.
 
-Trong Manager của từng profile, đặt:
+Trong popup/options của từng profile, đặt:
 
 - `Profile ID`: ví dụ `profile-1`, `profile-2`, `shop-account-a`
 - `Profile name`: tên dễ nhớ

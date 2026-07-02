@@ -143,13 +143,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'open-manager') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('manager.html') });
-    sendResponse({ ok: true });
+    openServerManager()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 
   return false;
 });
+
+async function openServerManager() {
+  const settings = await getSettings();
+  const base = String(settings.apiBase || DEFAULT_SETTINGS.apiBase).replace(/\/+$/, '');
+  const url = `${base}/admin/`;
+  await chrome.tabs.create({ url });
+  return { url };
+}
 
 async function pollJobs() {
   const settings = await getSettings();
@@ -398,6 +407,13 @@ async function sendHeartbeat(settings, state) {
       apiBase: settings.apiBase,
       extensionVersion: chrome.runtime.getManifest().version,
       userAgent: globalThis.navigator?.userAgent || '',
+      capabilities: [
+        'product',
+        'product-info',
+        'product-affiliate',
+        'affiliate',
+        settings.facebookPublisherEnabled ? 'facebook' : '',
+      ].filter(Boolean),
       state,
     }),
   });
@@ -546,7 +562,8 @@ async function runTypedJob(settings, job) {
   }
 
   if (job.type === 'affiliate-links') {
-    const cached = await getAffiliateCache(job.input);
+    const input = normalizeAffiliateInput(job.input);
+    const cached = await getAffiliateCache(input);
     if (cached) {
       return {
         type: job.type,
@@ -555,9 +572,16 @@ async function runTypedJob(settings, job) {
       };
     }
     const affiliateTab = await getAffiliateTab(settings);
-    const affiliateLink = await collectAffiliateLinksFromTab(affiliateTab.id, job.input);
-    await setAffiliateCache(job.input, affiliateLink);
+    const affiliateLink = await collectAffiliateLinksFromTab(affiliateTab.id, input);
+    await setAffiliateCache(input, affiliateLink);
     return { type: job.type, affiliateLink };
+  }
+
+  if (job.type === 'affiliate-offer') {
+    return {
+      type: job.type,
+      ...(await collectAffiliateOfferForItem(job.input || {}, job.url)),
+    };
   }
 
   if (job.type === 'product-affiliate') {
@@ -565,7 +589,7 @@ async function runTypedJob(settings, job) {
     if (cachedProduct) {
       return {
         type: job.type,
-        ...(await collectProductAffiliateForProduct(settings, cachedProduct, job.input)),
+        ...(await collectProductAffiliateForProduct(settings, cachedProduct, normalizeAffiliateInput(job.input, job.url))),
         productCacheHit: true,
       };
     }
@@ -575,7 +599,7 @@ async function runTypedJob(settings, job) {
       await setProductCache(productData);
       return {
         type: job.type,
-        ...(await collectProductAffiliateForProduct(settings, productData, job.input)),
+        ...(await collectProductAffiliateForProduct(settings, productData, normalizeAffiliateInput(job.input, job.url))),
       };
     } finally {
       await closeTab(productTab);
@@ -853,6 +877,7 @@ async function reportFacebookWrapFailure(settings, affiliateResult, error) {
 }
 
 async function collectProductAffiliateForProduct(settings, productData, input) {
+  const affiliateInput = normalizeAffiliateInput(input, productData?.url);
   let offerTab;
   try {
     const affiliateOffer = productData.itemId
@@ -867,18 +892,52 @@ async function collectProductAffiliateForProduct(settings, productData, input) {
         })()
       : undefined;
 
-    const cachedAffiliate = await getAffiliateCache(input);
+    const cachedAffiliate = await getAffiliateCache(affiliateInput);
     const affiliateLink = cachedAffiliate || await (async () => {
       const affiliateTab = await getAffiliateTab(settings);
-      const link = await collectAffiliateLinksFromTab(affiliateTab.id, input).catch((error) => ({
+      const link = await collectAffiliateLinksFromTab(affiliateTab.id, affiliateInput).catch((error) => ({
         available: false,
         error: error.message,
       }));
-      if (link?.available !== false) await setAffiliateCache(input, link);
+      if (link?.available !== false) await setAffiliateCache(affiliateInput, link);
       return link;
     })();
 
     return { productData, affiliateOffer, affiliateLink, cacheHit: Boolean(cachedAffiliate) };
+  } finally {
+    await closeTab(offerTab);
+  }
+}
+
+async function collectAffiliateOfferForItem(input = {}, fallbackUrl = '') {
+  const url = input.url || fallbackUrl || '';
+  const ids = extractProductIdsFromUrl(url);
+  const itemId = String(input.itemId || input.item_id || ids?.itemId || '').trim();
+  if (!itemId) throw new Error('itemId is required for affiliate-offer job.');
+
+  const cached = await getOfferCache(itemId);
+  if (cached && !input.forceRefresh) {
+    return {
+      itemId,
+      shopId: input.shopId || ids?.shopId || '',
+      productKey: input.productKey || (ids ? `${ids.shopId}.${ids.itemId}` : ''),
+      affiliateOffer: cached,
+      cacheHit: true,
+    };
+  }
+
+  let offerTab;
+  try {
+    offerTab = await openReadyTab(`https://affiliate.shopee.vn/offer/product_offer/${encodeURIComponent(itemId)}`);
+    const affiliateOffer = await collectAffiliateOfferFromTab(offerTab.id, itemId);
+    await setOfferCache(itemId, affiliateOffer);
+    return {
+      itemId,
+      shopId: input.shopId || ids?.shopId || '',
+      productKey: input.productKey || (ids ? `${ids.shopId}.${ids.itemId}` : ''),
+      affiliateOffer,
+      cacheHit: false,
+    };
   } finally {
     await closeTab(offerTab);
   }
@@ -1037,6 +1096,22 @@ function affiliateCacheKey(input = {}) {
   const links = Array.isArray(input.links) ? input.links : [];
   const subIds = Array.isArray(input.subIds) ? input.subIds : [];
   return encodeURIComponent(JSON.stringify({ links, subIds }));
+}
+
+function normalizeAffiliateInput(input = {}, fallbackUrl = '') {
+  const rawLinks = Array.isArray(input.links)
+    ? input.links
+    : input.link
+      ? [input.link]
+      : fallbackUrl
+        ? [fallbackUrl]
+        : [];
+  const links = rawLinks.map((link) => String(link || '').trim()).filter(Boolean);
+  return {
+    ...input,
+    links,
+    subIds: normalizeSubIds(input.subIds),
+  };
 }
 
 function extractProductIdsFromUrl(url) {

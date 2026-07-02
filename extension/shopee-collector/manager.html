@@ -3,265 +3,139 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>shopeeAI Manager</title>
-    <link rel="stylesheet" href="manager.css">
+    <title>shopeeAI Bridge</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f0f0f7;
+        --card: #ffffff;
+        --ink: #333239;
+        --muted: #6f7482;
+        --line: #dedff0;
+        --blue: #4351ac;
+        --mint: #95e8ca;
+      }
+      * { box-sizing: border-box; }
+      body {
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        min-height: 100vh;
+        padding: 24px;
+      }
+      main {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 20px 50px rgba(51, 50, 57, .08);
+        display: grid;
+        gap: 14px;
+        margin: 0 auto;
+        max-width: 680px;
+        padding: 22px;
+      }
+      h1, p { margin: 0; }
+      h1 { font-size: 24px; letter-spacing: 0; }
+      p { color: var(--muted); }
+      .brand {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+      }
+      .mark {
+        align-items: center;
+        background: var(--mint);
+        border-radius: 8px;
+        color: #1f4b3a;
+        display: grid;
+        font-weight: 900;
+        height: 44px;
+        place-items: center;
+        width: 44px;
+      }
+      .actions {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      button {
+        background: var(--blue);
+        border: 0;
+        border-radius: 8px;
+        color: white;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        min-height: 40px;
+        padding: 10px 12px;
+      }
+      button.secondary {
+        background: #eef0f7;
+        color: var(--ink);
+      }
+      code {
+        background: #f6f6fb;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: block;
+        overflow-wrap: anywhere;
+        padding: 10px;
+      }
+      #status {
+        background: #f8f8fc;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        padding: 10px;
+      }
+      @media (max-width: 640px) {
+        .actions { grid-template-columns: 1fr; }
+      }
+    </style>
   </head>
   <body>
-    <header class="topbar">
+    <main>
       <div class="brand">
-        <div class="mark">SC</div>
+        <div class="mark">SA</div>
         <div>
-          <h1>shopeeAI</h1>
-          <p>Queue, affiliate links, product data, media, and result review.</p>
+          <h1>shopeeAI Bridge</h1>
+          <p>The full dashboard now runs on the local API server.</p>
         </div>
       </div>
-      <div class="top-actions">
-        <span id="serverStatus" class="pill">Checking</span>
-        <button id="runAiFix">AI fix</button>
-        <button id="runAiDiagnostics" class="ghost">Diagnose</button>
-        <button id="checkServer" class="ghost">Check server</button>
-        <button id="runQueue">Run queue</button>
-        <button id="openApiDocs" class="ghost">API docs</button>
-        <button id="openSettings" class="ghost">Settings</button>
+      <code id="adminUrl">http://127.0.0.1:8787/admin/</code>
+      <div class="actions">
+        <button id="openAdmin">Open admin</button>
+        <button id="checkServer" class="secondary">Check server</button>
+        <button id="pollNow" class="secondary">Run queue</button>
       </div>
-    </header>
-
-    <main class="shell">
-      <section class="card ai-card">
-        <div class="section-head">
-          <div>
-            <h2>AI Diagnostics</h2>
-            <p class="muted">Self-check extension injection, Shopee buttons, server, queue, and common recovery actions.</p>
-          </div>
-          <span id="aiStatus" class="pill">Idle</span>
-        </div>
-        <div id="aiSummary" class="ai-summary">Run Diagnose or AI fix when buttons/panel do not appear on Shopee.</div>
-      </section>
-
-      <section class="workbench">
-        <section class="card">
-          <div class="card-head">
-            <h2>New Job</h2>
-            <span class="hint">Create</span>
-          </div>
-          <label>Job type
-            <select id="jobType">
-              <option value="product-affiliate">Product + affiliate</option>
-              <option value="product-info">Product info</option>
-              <option value="product-links">Product links</option>
-              <option value="affiliate-links">Affiliate links only</option>
-              <option value="facebook-post">Facebook post</option>
-              <option value="facebook-comment">Facebook comment</option>
-            </select>
-          </label>
-          <label>Product or listing URL
-            <textarea id="jobUrl" rows="5" placeholder="Paste one product URL, listing URL, or multiple product URLs for affiliate-links"></textarea>
-          </label>
-          <div class="grid-2">
-            <label>Keyword
-              <input id="keyword" placeholder="ốp lưng iphone">
-            </label>
-            <label>Limit
-              <input id="limit" type="number" min="1" max="500" value="20">
-            </label>
-          </div>
-          <label>Target profile
-            <input id="targetProfileId" placeholder="Blank = any online profile">
-          </label>
-          <div class="subids">
-            <label>Sub ID 1
-              <input id="subId1" value="n8n">
-            </label>
-            <label>Sub ID 2
-              <input id="subId2">
-            </label>
-            <label>Sub ID 3
-              <input id="subId3">
-            </label>
-            <label>Sub ID 4
-              <input id="subId4">
-            </label>
-            <label>Sub ID 5
-              <input id="subId5">
-            </label>
-          </div>
-          <section class="inline-panel">
-            <div class="card-head">
-              <h3>Facebook</h3>
-              <span class="hint">Publisher</span>
-            </div>
-            <label>Target page/profile URL
-              <input id="facebookTargetUrl" placeholder="https://www.facebook.com/page">
-            </label>
-            <div class="grid-2-even">
-              <label>Publish mode
-                <select id="facebookPublishMode">
-                  <option value="auto">Auto</option>
-                  <option value="draft">Draft</option>
-                  <option value="confirm">Confirm</option>
-                  <option value="manual">Manual</option>
-                </select>
-              </label>
-              <label>Cooldown minutes
-                <input id="facebookCooldownMinutes" type="number" min="1" max="1440" value="45">
-              </label>
-            </div>
-            <label>Caption template
-              <textarea id="facebookCaption" rows="4" placeholder="{name}\n\nGiá: {salePrice}\nLink mua: {affiliateLink}"></textarea>
-            </label>
-            <label>Comment target post URLs
-              <textarea id="facebookCommentPostUrls" rows="4" placeholder="https://www.facebook.com/page/posts/...\nhttps://www.facebook.com/page/posts/..."></textarea>
-            </label>
-            <label>Comment target mode
-              <select id="facebookCommentMode">
-                <option value="specific">Specific / first configured post</option>
-                <option value="random">Random from configured list</option>
-              </select>
-            </label>
-          </section>
-          <button id="createJob" class="primary wide-btn">Create job</button>
-        </section>
-
-        <section class="card queue-card">
-          <div class="section-head">
-            <div>
-              <h2>Queue</h2>
-              <p class="muted">Created jobs and active queue.</p>
-            </div>
-            <div class="toolbar">
-              <select id="filterStatus" aria-label="Filter jobs">
-                <option value="all">All statuses</option>
-                <option value="queued">Queued</option>
-                <option value="running">Running</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-              <button id="refreshJobs" class="secondary">Refresh</button>
-              <button id="clearCompleted" class="secondary">Clear completed</button>
-            </div>
-          </div>
-          <section class="stats">
-            <article class="stat"><span>Queued</span><strong id="statQueued">0</strong></article>
-            <article class="stat"><span>Running</span><strong id="statRunning">0</strong></article>
-            <article class="stat"><span>Completed</span><strong id="statCompleted">0</strong></article>
-            <article class="stat"><span>Failed</span><strong id="statFailed">0</strong></article>
-          </section>
-          <div class="table-head">
-            <span>ID</span>
-            <span>Type</span>
-            <span>Target</span>
-            <span>Status</span>
-            <span>Updated</span>
-            <span></span>
-          </div>
-          <div id="jobs" class="jobs"></div>
-        </section>
-      </section>
-
-      <section class="result-grid">
-        <section class="card result-card parsed-result">
-          <div class="section-head">
-            <div>
-              <h2>Result</h2>
-              <p class="muted">Readable output split from JSON.</p>
-            </div>
-          </div>
-          <div id="resultSummary" class="result-summary empty">Select a job from the queue.</div>
-          <div class="action-grid">
-            <button id="copyProductName" class="secondary">Copy name</button>
-            <button id="copyDescription" class="secondary">Copy description</button>
-            <button id="copyProductLink" class="secondary">Copy product link</button>
-            <button id="copyAffiliateLink" class="secondary">Copy affiliate link</button>
-            <button id="downloadImages" class="secondary">Download images</button>
-            <button id="downloadVideos" class="secondary">Download videos</button>
-            <button id="createFacebookJob" class="secondary">Create FB job</button>
-            <button id="createFacebookWrapJob" class="secondary">Create FB wrap</button>
-            <button id="copyFacebookWrappedLink" class="secondary">Copy FB Shopee link</button>
-          </div>
-        </section>
-        <section class="card result-card json-result">
-          <div class="section-head">
-            <div>
-              <h2>JSON</h2>
-              <p class="muted">Raw payload for automation.</p>
-            </div>
-            <button id="copyResult" class="secondary">Copy JSON</button>
-          </div>
-          <pre id="resultJson"></pre>
-        </section>
-      </section>
+      <div id="status">Ready.</div>
     </main>
+    <script>
+      const statusEl = document.querySelector('#status');
+      const adminUrlEl = document.querySelector('#adminUrl');
 
-    <aside id="settingsDrawer" class="settings-drawer" aria-hidden="true">
-      <div class="drawer-backdrop" id="closeSettings"></div>
-      <section class="drawer-panel">
-        <div class="section-head">
-          <div>
-            <h2>Settings</h2>
-            <p class="muted">API, profile, and auto-run.</p>
-          </div>
-          <button id="closeSettingsButton" class="ghost">Close</button>
-        </div>
-        <label>API base
-          <input id="apiBase" autocomplete="off">
-        </label>
-        <label>API token
-          <input id="apiToken" autocomplete="off">
-        </label>
-        <label>Affiliate URL
-          <input id="affiliateUrl" autocomplete="off">
-        </label>
-        <label>Default Facebook target URL
-          <input id="settingsFacebookTargetUrl" autocomplete="off" placeholder="https://www.facebook.com/page">
-        </label>
-        <div class="grid-2-even">
-          <label>Facebook profile ID
-            <input id="facebookProfileId" autocomplete="off" placeholder="facebook-profile-1">
-          </label>
-          <label>Facebook profile name
-            <input id="facebookProfileName" autocomplete="off" placeholder="Facebook Profile 1">
-          </label>
-        </div>
-        <label class="check">
-          <input id="facebookPublisherEnabled" type="checkbox">
-          <span>Auto-run Facebook publisher queue in shopeeAI</span>
-        </label>
-        <div class="grid-2-even">
-          <label>Profile ID
-            <input id="profileId" autocomplete="off" placeholder="profile-1">
-          </label>
-          <label>Profile name
-            <input id="profileName" autocomplete="off" placeholder="Main">
-          </label>
-        </div>
-        <label class="check">
-          <input id="enabled" type="checkbox">
-          <span>Auto-run queue</span>
-        </label>
-        <button id="saveSettings" class="primary wide-btn">Save settings</button>
-      </section>
-    </aside>
+      document.querySelector('#openAdmin').addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'open-manager' }).then((response) => {
+          statusEl.textContent = response?.ok ? `Opened ${response.result?.url || 'admin'}.` : response?.error || 'Open failed.';
+        });
+      });
 
-    <aside id="apiDocsDrawer" class="settings-drawer" aria-hidden="true">
-      <div class="drawer-backdrop" id="closeApiDocs"></div>
-      <section class="drawer-panel docs-panel">
-        <div class="section-head">
-          <div>
-            <h2>API Docs</h2>
-            <p class="muted">Quick reference for local and extension endpoints.</p>
-          </div>
-          <button id="closeApiDocsButton" class="ghost">Close</button>
-        </div>
-        <div class="docs-actions">
-          <button id="copyApiDocs" class="secondary">Copy docs</button>
-          <button id="copyApiBase" class="secondary">Copy API base</button>
-        </div>
-        <div id="apiDocsContent" class="docs-content"></div>
-      </section>
-    </aside>
+      document.querySelector('#checkServer').addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'check-server' }).then((response) => {
+          statusEl.textContent = response?.ok && response.result?.ok ? 'Server online.' : response?.error || 'Server offline.';
+        });
+      });
 
-    <div id="toast"></div>
-    <script src="manager.js"></script>
+      document.querySelector('#pollNow').addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'poll-now' }).then((response) => {
+          statusEl.textContent = response?.ok ? 'Queue poll requested.' : response?.error || 'Poll failed.';
+        });
+      });
+
+      chrome.storage.local.get({ apiBase: 'http://127.0.0.1:8787' }).then((settings) => {
+        adminUrlEl.textContent = `${String(settings.apiBase || '').replace(/\/+$/, '')}/admin/`;
+      });
+    </script>
   </body>
 </html>

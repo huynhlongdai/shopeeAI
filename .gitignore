@@ -9,6 +9,8 @@ node_modules/
 # Local browser/session state
 .shopee-browser/
 **/.shopee-browser/
+.shopeeai-data/
+**/.shopeeai-data/
 
 # OS/editor noise
 .DS_Store

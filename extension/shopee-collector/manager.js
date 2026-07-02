@@ -53,8 +53,19 @@ const API_DOC_SECTIONS = [
       ['POST', '/api/shopee/extension/affiliate-links', 'Queue affiliate conversion for up to 5 links. Supports subId1..subId5.'],
       ['POST', '/api/shopee/extension/affiliate-links/batch', 'Queue unlimited links; server chunks into jobs of 5 links. Supports subId1..subId5.'],
       ['POST', '/api/shopee/extension/product-affiliate', 'Collect product info, affiliate offer, and custom affiliate link for one product URL.'],
+      ['POST', '/api/shopee/extension/product-affiliate-fast', 'Fast cache-aware product + commission + affiliate link job. Returns cache immediately when fresh.'],
+      ['POST', '/api/shopee/extension/product-affiliate-batch', 'Create a profile-aware fast batch with cached results and queued misses.'],
       ['POST', '/api/shopee/affiliate-links', 'Legacy Playwright flow for up to 5 links. Prefer extension endpoint.'],
       ['POST', '/api/shopee/product-affiliate', 'Legacy Playwright product info + affiliate link. Prefer extension endpoint.'],
+    ],
+  },
+  {
+    title: 'Cache + Progress',
+    text: 'Server stores product, offer, affiliate, job, and batch state in .shopeeai-data/store.json for faster repeat runs.',
+    endpoints: [
+      ['GET', '/api/shopee/cache/product/<shopId.itemId>', 'Read cached product data. Add ?stale=1 to allow expired cache.'],
+      ['POST', '/api/shopee/cache/clear', 'Clear all or one cache group: all, products, affiliate-links, offers.'],
+      ['GET', '/api/shopee/extension/batches/<batchId>', 'Read batch progress, partial results, and failed/completed counts.'],
     ],
   },
   {

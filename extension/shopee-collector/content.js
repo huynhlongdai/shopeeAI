@@ -1597,8 +1597,37 @@ async function renderCollectorPanel() {
   });
 }
 
-function sendRuntimeMessage(message) {
-  return chrome.runtime.sendMessage(message);
+async function sendRuntimeMessage(message) {
+  if (!runtimeIsAvailable()) {
+    const error = 'shopeeAI extension was reloaded. Reload this Shopee tab and try again.';
+    showShopeeAiNotice(error, true);
+    return { ok: false, error, contextInvalidated: true };
+  }
+
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    if (isExtensionContextInvalidated(error)) {
+      const messageText = 'shopeeAI extension was reloaded. Reload this Shopee tab and try again.';
+      showShopeeAiNotice(messageText, true);
+      return { ok: false, error: messageText, contextInvalidated: true };
+    }
+    throw error;
+  }
+}
+
+function runtimeIsAvailable() {
+  try {
+    return Boolean(globalThis.chrome?.runtime?.id);
+  } catch {
+    return false;
+  }
+}
+
+function isExtensionContextInvalidated(error) {
+  return /Extension context invalidated|context invalidated|Extension context was invalidated/i.test(
+    String(error?.message || error || ''),
+  );
 }
 
 function renderJobRow(job) {

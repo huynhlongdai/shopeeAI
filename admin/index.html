@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>shopeeAI Admin</title>
+    <link rel="stylesheet" href="/admin/admin.css">
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">SA</div>
+          <div>
+            <strong>shopeeAI</strong>
+            <span>Admin server</span>
+          </div>
+        </div>
+        <nav class="nav">
+          <a class="active" href="#overview">Overview</a>
+          <a href="#jobs">Jobs</a>
+          <a href="#result">Result</a>
+          <a href="#profiles">Profiles</a>
+          <a href="/health" target="_blank">Health</a>
+        </nav>
+        <section class="mini-panel">
+          <span>Extension role</span>
+          <strong>Bridge only</strong>
+          <p>Chrome profiles collect Shopee data while this page manages jobs, cache, and results.</p>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Operations dashboard</span>
+            <h1>Queue, affiliate, product, and media control</h1>
+          </div>
+          <div class="top-actions">
+            <label class="token-field">API token
+              <input id="apiToken" type="password" placeholder="change-me">
+            </label>
+            <button id="saveToken" class="ghost">Save</button>
+            <button id="refreshAll">Refresh</button>
+          </div>
+        </header>
+
+        <section id="overview" class="metric-grid">
+          <article class="metric"><span>Queued</span><strong id="metricQueued">0</strong></article>
+          <article class="metric"><span>Running</span><strong id="metricRunning">0</strong></article>
+          <article class="metric"><span>Completed</span><strong id="metricCompleted">0</strong></article>
+          <article class="metric"><span>Failed</span><strong id="metricFailed">0</strong></article>
+          <article class="metric accent"><span>Product cache</span><strong id="metricProducts">0</strong></article>
+          <article class="metric mint"><span>Profiles</span><strong id="metricProfiles">0</strong></article>
+        </section>
+
+        <section class="layout">
+          <section class="panel" id="create">
+            <div class="panel-head">
+              <div>
+                <h2>Create job</h2>
+                <p>Create work for connected Chrome extension profiles.</p>
+              </div>
+              <span class="badge">Server UI</span>
+            </div>
+
+            <label>Job type
+              <select id="jobType">
+                <option value="product-affiliate">Product + affiliate</option>
+                <option value="affiliate-offer">Commission only</option>
+                <option value="product-info">Product info</option>
+                <option value="product-links">Product links</option>
+                <option value="affiliate-links">Affiliate links only</option>
+                <option value="facebook-post">Facebook post</option>
+                <option value="facebook-comment">Facebook comment</option>
+              </select>
+            </label>
+
+            <label>URL, links, or listing target
+              <textarea id="jobUrl" rows="5" placeholder="Paste product URLs, affiliate links, or Facebook target URLs"></textarea>
+            </label>
+
+            <div class="grid-2">
+              <label>Keyword
+                <input id="keyword" placeholder="op lung iphone">
+              </label>
+              <label>Limit
+                <input id="limit" type="number" min="1" max="500" value="20">
+              </label>
+            </div>
+
+            <div class="grid-3">
+              <label>Mode
+                <select id="mode">
+                  <option value="fast">Fast</option>
+                  <option value="full">Full</option>
+                  <option value="deep">Deep</option>
+                </select>
+              </label>
+              <label>Max pages
+                <input id="maxPages" type="number" min="1" max="50" value="1">
+              </label>
+              <label>Profile
+                <input id="targetProfileId" placeholder="Any">
+              </label>
+            </div>
+
+            <div class="subids">
+              <label>Sub ID 1<input id="subId1" value="n8n"></label>
+              <label>Sub ID 2<input id="subId2"></label>
+              <label>Sub ID 3<input id="subId3"></label>
+              <label>Sub ID 4<input id="subId4"></label>
+              <label>Sub ID 5<input id="subId5"></label>
+            </div>
+
+            <section class="soft-block">
+              <div class="panel-head compact">
+                <h3>Facebook options</h3>
+                <span class="badge muted-badge">Optional</span>
+              </div>
+              <label>Target page/profile or post URL
+                <input id="facebookTargetUrl" placeholder="https://www.facebook.com/page">
+              </label>
+              <div class="grid-2">
+                <label>Publish mode
+                  <select id="facebookPublishMode">
+                    <option value="auto">Auto</option>
+                    <option value="draft">Draft</option>
+                    <option value="confirm">Confirm</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </label>
+                <label>Cooldown minutes
+                  <input id="facebookCooldownMinutes" type="number" min="1" max="1440" value="45">
+                </label>
+              </div>
+              <label>Caption or comment
+                <textarea id="facebookCaption" rows="4" placeholder="{name}\n\nPrice: {salePrice}\nLink: {affiliateLink}"></textarea>
+              </label>
+            </section>
+
+            <div class="button-row">
+              <button id="createJob">Create job</button>
+              <button id="createBatch" class="ghost">Create batch</button>
+            </div>
+          </section>
+
+          <section class="panel jobs-panel" id="jobs">
+            <div class="panel-head">
+              <div>
+                <h2>Queue</h2>
+                <p>Lightweight list. Result JSON loads only after selecting a job.</p>
+              </div>
+              <div class="toolbar">
+                <select id="filterStatus">
+                  <option value="all">All statuses</option>
+                  <option value="queued">Queued</option>
+                  <option value="running">Running</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+                <button id="refreshJobs" class="ghost">Refresh</button>
+              </div>
+            </div>
+            <div class="table-head">
+              <span>ID</span><span>Source</span><span>Type</span><span>Target</span><span>Status</span><span></span>
+            </div>
+            <div id="jobsList" class="jobs-list"></div>
+          </section>
+        </section>
+
+        <section class="result-layout" id="result">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>Readable result</h2>
+                <p>Product, affiliate, Facebook, and media fields extracted from JSON.</p>
+              </div>
+            </div>
+            <div id="resultSummary" class="empty-state">Select a completed job.</div>
+            <div class="quick-actions">
+              <button id="copyName" class="ghost">Copy name</button>
+              <button id="copyDescription" class="ghost">Copy description</button>
+              <button id="copyProductLink" class="ghost">Copy product link</button>
+              <button id="copyAffiliateLink" class="ghost">Copy affiliate link</button>
+              <button id="downloadImages" class="ghost">Download images</button>
+              <button id="downloadVideos" class="ghost">Download videos</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>JSON detail</h2>
+                <p>Loaded on demand to keep the dashboard fast.</p>
+              </div>
+              <button id="copyJson" class="ghost">Copy JSON</button>
+            </div>
+            <pre id="resultJson">{}</pre>
+          </section>
+        </section>
+
+        <section class="panel" id="profiles">
+          <div class="panel-head">
+            <div>
+              <h2>Profiles and batches</h2>
+              <p>Connected workers, cooldown state, cache, and batch progress.</p>
+            </div>
+          </div>
+          <div id="profileGrid" class="profile-grid"></div>
+          <div id="batchList" class="batch-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast"></div>
+    <script src="/admin/admin.js"></script>
+  </body>
+</html>

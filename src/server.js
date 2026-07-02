@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -20,6 +20,14 @@ const SHOPEE_HOME_URL = process.env.SHOPEE_HOME_URL || 'https://shopee.vn/';
 const HEADLESS = (process.env.SHOPEE_BROWSER_HEADLESS || 'true').toLowerCase() !== 'false';
 const BROWSER_CHANNEL = process.env.SHOPEE_BROWSER_CHANNEL || 'chrome';
 const EXTENSION_JOB_TIMEOUT_MS = numberFromEnv('EXTENSION_JOB_TIMEOUT_MS', 10 * 60 * 1000);
+const DATA_DIR = path.resolve(rootDir, process.env.SHOPEEAI_DATA_DIR || '.shopeeai-data');
+const STORE_FILE = path.join(DATA_DIR, 'store.json');
+const ADMIN_DIR = path.join(rootDir, 'admin');
+const PRODUCT_CACHE_TTL_MS = numberFromEnv('PRODUCT_CACHE_TTL_MS', 3 * 60 * 60 * 1000);
+const PRODUCT_STATIC_CACHE_TTL_MS = numberFromEnv('PRODUCT_STATIC_CACHE_TTL_MS', 24 * 60 * 60 * 1000);
+const OFFER_CACHE_TTL_MS = numberFromEnv('OFFER_CACHE_TTL_MS', 60 * 60 * 1000);
+const AFFILIATE_CACHE_TTL_MS = numberFromEnv('AFFILIATE_CACHE_TTL_MS', 14 * 24 * 60 * 60 * 1000);
+const PROFILE_COOLDOWN_BASE_MS = numberFromEnv('PROFILE_COOLDOWN_BASE_MS', 30 * 1000);
 const MAX_LINKS = 5;
 const SUB_ID_KEYS = ['subId1', 'subId2', 'subId3', 'subId4', 'subId5'];
 
@@ -35,6 +43,12 @@ let facebookJobs = [];
 let facebookJobCounter = 0;
 let facebookProfiles = new Map();
 let aiDiagnostics = [];
+let productCache = new Map();
+let affiliateLinkCache = new Map();
+let offerCache = new Map();
+let batchRequests = [];
+let batchCounter = 0;
+let storeSaveTimer;
 let facebookSettings = {
   defaultTargetUrl: normalizeFacebookTargetUrl(process.env.FACEBOOK_DEFAULT_TARGET_URL),
   publishMode: normalizePublishMode(process.env.FACEBOOK_PUBLISH_MODE || 'draft'),
@@ -44,6 +58,8 @@ let facebookSettings = {
   updatedAt: '',
   updatedBy: '',
 };
+
+await loadPersistentStore();
 
 if (process.argv.includes('--login')) {
   await login();
@@ -72,8 +88,24 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && (pathname === '/' || pathname === '/admin')) {
+    sendRedirect(res, '/admin/');
+    return;
+  }
+
+  if (req.method === 'GET' && pathname.startsWith('/admin/')) {
+    await serveAdminAsset(pathname, res);
+    return;
+  }
+
   if (req.method === 'GET' && pathname === '/health') {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/admin/overview') {
+    assertAuthorized(req);
+    sendJson(res, 200, getAdminOverview());
     return;
   }
 
@@ -132,12 +164,66 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/shopee/affiliate-offer') {
+    assertAuthorized(req);
+    const input = await normalizeAffiliateOfferInput({
+      itemId: requestUrl.searchParams.get('itemId'),
+      url: requestUrl.searchParams.get('url') || requestUrl.searchParams.get('link'),
+      resolve: truthyQuery(requestUrl.searchParams.get('resolve')),
+    });
+    const result = await getAffiliateOfferData(input, {
+      allowStale: truthyQuery(requestUrl.searchParams.get('stale')),
+      forceRefresh: truthyQuery(requestUrl.searchParams.get('forceRefresh')),
+    });
+    sendJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/affiliate-offer') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const input = await normalizeAffiliateOfferInput(body);
+    const result = await getAffiliateOfferData(input, {
+      allowStale: Boolean(body.allowStale),
+      forceRefresh: Boolean(body.forceRefresh),
+    });
+    sendJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/shopee/browser-product-data') {
     assertAuthorized(req);
     const body = await readJson(req);
     const result = normalizeBrowserProductData(body);
     latestBrowserProductData = result;
+    cacheProductData(result, { source: 'browser-product-data' });
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, productData: result });
+    return;
+  }
+
+  const cacheProductMatch = pathname.match(/^\/api\/shopee\/cache\/product\/([^/]+)$/);
+  if (req.method === 'GET' && cacheProductMatch) {
+    assertAuthorized(req);
+    const entry = getFreshProductCache(cacheProductMatch[1], {
+      mode: requestUrl.searchParams.get('mode') || 'fast',
+      allowStale: truthyQuery(requestUrl.searchParams.get('stale')),
+    });
+    sendJson(res, entry ? 200 : 404, {
+      ok: Boolean(entry),
+      cacheHit: Boolean(entry),
+      entry,
+      error: entry ? undefined : 'Product cache not found or expired.',
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/cache/clear') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const result = clearCache(body);
+    scheduleStoreSave();
+    sendJson(res, 200, { ok: true, ...result });
     return;
   }
 
@@ -189,8 +275,13 @@ async function handleRequest(req, res) {
     assertAuthorized(req);
     const limit = Math.min(numberFromQuery(requestUrl.searchParams.get('limit'), 50), 200);
     const status = String(requestUrl.searchParams.get('status') || '').trim();
+    const light = truthyQuery(requestUrl.searchParams.get('light'));
     const jobs = status ? facebookJobs.filter((job) => job.status === status) : facebookJobs;
-    sendJson(res, 200, { ok: true, jobs: jobs.slice(-limit).reverse(), total: jobs.length });
+    sendJson(res, 200, {
+      ok: true,
+      jobs: jobs.slice(-limit).reverse().map((job) => light ? summarizeFacebookJob(job) : job),
+      total: jobs.length,
+    });
     return;
   }
 
@@ -233,6 +324,7 @@ async function handleRequest(req, res) {
         currentJobId: job.id,
       });
     }
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -254,6 +346,7 @@ async function handleRequest(req, res) {
         currentJobId: '',
       });
     }
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -277,6 +370,7 @@ async function handleRequest(req, res) {
         currentJobId: '',
       });
     }
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -294,6 +388,7 @@ async function handleRequest(req, res) {
     delete job.completedAt;
     delete job.failedAt;
     job.updatedAt = new Date().toISOString();
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -307,6 +402,7 @@ async function handleRequest(req, res) {
     }
     job.status = 'cancelled';
     job.updatedAt = new Date().toISOString();
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -329,6 +425,7 @@ async function handleRequest(req, res) {
         currentJobId: '',
       });
     }
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -353,7 +450,7 @@ async function handleRequest(req, res) {
   if (req.method === 'POST' && pathname === '/api/shopee/extension/jobs') {
     assertAuthorized(req);
     const body = await readJson(req);
-    const job = createExtensionJobFromBody(body);
+    const job = await createExtensionJobFromBody(body);
     sendJson(res, 202, { ok: true, job });
     return;
   }
@@ -406,10 +503,17 @@ async function handleRequest(req, res) {
     assertAuthorized(req);
     const body = await readJson(req);
     const input = normalizeInput(body);
+    const cached = getFreshAffiliateCache(input);
+    if (cached && !body.forceRefresh) {
+      sendJson(res, 200, { ok: true, cacheHit: true, affiliateLink: cached.value, cache: cached });
+      return;
+    }
     const job = createExtensionJob({
       type: 'affiliate-links',
       input,
       targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+      priority: numberFromQuery(body.priority, 80),
+      dedupeKey: affiliateCacheKey(input),
     });
     sendJson(res, 202, { ok: true, job });
     return;
@@ -431,6 +535,37 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'POST' && pathname === '/api/shopee/extension/affiliate-offer') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const input = await normalizeAffiliateOfferInput(body);
+    const cached = getFreshOfferCache(input.itemId, {
+      allowStale: Boolean(body.allowStale),
+    });
+    if (cached && !body.forceRefresh) {
+      sendJson(res, 200, {
+        ok: true,
+        cacheHit: true,
+        itemId: input.itemId,
+        shopId: input.shopId,
+        productKey: input.productKey,
+        affiliateOffer: cached.value,
+        cache: cached,
+      });
+      return;
+    }
+    const job = createExtensionJob({
+      type: 'affiliate-offer',
+      url: input.url,
+      input,
+      targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+      priority: numberFromQuery(body.priority, 85),
+      dedupeKey: affiliateOfferDedupeKey(input),
+    });
+    sendJson(res, job.reused ? 200 : 202, { ok: true, cacheHit: false, reused: Boolean(job.reused), job });
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/shopee/extension/product-affiliate') {
     assertAuthorized(req);
     const body = await readJson(req);
@@ -440,22 +575,74 @@ async function handleRequest(req, res) {
       links: [productInput.url],
       link: undefined,
     });
+    const cached = getProductAffiliateCachedResult(productInput.url, linkInput, {
+      mode: body.mode || 'full',
+      allowStale: Boolean(body.allowStale),
+    });
+    if (cached && !body.forceRefresh) {
+      sendJson(res, 200, { ok: true, cacheHit: true, ...cached });
+      return;
+    }
     const job = createExtensionJob({
       type: 'product-affiliate',
       url: productInput.url,
       input: linkInput,
       targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+      priority: numberFromQuery(body.priority, 90),
+      mode: normalizeFetchMode(body.mode || 'full'),
+      dedupeKey: productAffiliateDedupeKey(productInput.url, linkInput, body.mode || 'full'),
     });
     sendJson(res, 202, { ok: true, job });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/extension/product-affiliate-fast') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const productInput = normalizeProductInfoInput(body);
+    const linkInput = normalizeInput({ ...body, links: [productInput.url], link: undefined });
+    const cached = getProductAffiliateCachedResult(productInput.url, linkInput, {
+      mode: 'fast',
+      allowStale: Boolean(body.allowStale),
+    });
+    if (cached && !body.forceRefresh) {
+      sendJson(res, 200, { ok: true, cacheHit: true, ...cached });
+      return;
+    }
+    const job = createExtensionJob({
+      type: 'product-affiliate',
+      url: productInput.url,
+      input: linkInput,
+      targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+      priority: numberFromQuery(body.priority, 100),
+      mode: 'fast',
+      dedupeKey: productAffiliateDedupeKey(productInput.url, linkInput, 'fast'),
+    });
+    sendJson(res, job.reused ? 200 : 202, {
+      ok: true,
+      cacheHit: false,
+      reused: Boolean(job.reused),
+      job,
+      missing: cached?.missing || ['productData', 'affiliateLink'],
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/shopee/extension/product-affiliate-batch') {
+    assertAuthorized(req);
+    const body = await readJson(req);
+    const batch = createProductAffiliateBatch(body);
+    sendJson(res, 202, { ok: true, ...batch });
     return;
   }
 
   if (req.method === 'GET' && pathname === '/api/shopee/extension/jobs') {
     assertAuthorized(req);
     const limit = Math.min(numberFromQuery(requestUrl.searchParams.get('limit'), 20), 100);
+    const light = truthyQuery(requestUrl.searchParams.get('light'));
     sendJson(res, 200, {
       ok: true,
-      jobs: extensionJobs.slice(-limit).reverse(),
+      jobs: extensionJobs.slice(-limit).reverse().map((job) => light ? summarizeExtensionJob(job) : job),
     });
     return;
   }
@@ -464,11 +651,24 @@ async function handleRequest(req, res) {
     assertAuthorized(req);
     const limit = Math.min(numberFromQuery(requestUrl.searchParams.get('limit'), 100), 500);
     const status = String(requestUrl.searchParams.get('status') || '').trim();
+    const light = truthyQuery(requestUrl.searchParams.get('light'));
     const jobs = status ? extensionJobs.filter((job) => job.status === status) : extensionJobs;
     sendJson(res, 200, {
       ok: true,
-      jobs: jobs.slice(-limit).reverse(),
+      jobs: jobs.slice(-limit).reverse().map((job) => light ? summarizeExtensionJob(job) : job),
       total: jobs.length,
+    });
+    return;
+  }
+
+  const batchMatch = pathname.match(/^\/api\/shopee\/extension\/batches\/([^/]+)$/);
+  if (req.method === 'GET' && batchMatch) {
+    assertAuthorized(req);
+    const batch = getBatchProgress(batchMatch[1]);
+    sendJson(res, batch ? 200 : 404, {
+      ok: Boolean(batch),
+      batch,
+      error: batch ? undefined : 'Batch not found.',
     });
     return;
   }
@@ -484,7 +684,7 @@ async function handleRequest(req, res) {
         state: 'polling',
       });
     }
-    const job = extensionJobs.find((row) => row.status === 'queued' && jobMatchesProfile(row, profileId));
+    const job = selectNextExtensionJob(profileId);
     if (!job) {
       sendJson(res, 200, { ok: true, job: null });
       return;
@@ -496,6 +696,7 @@ async function handleRequest(req, res) {
     if (profileId) {
       upsertExtensionProfile({ profileId, state: 'running', currentJobId: job.id });
     }
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -523,9 +724,18 @@ async function handleRequest(req, res) {
     }
     if (job.type === 'product-data' || job.type === 'product-info') {
       latestBrowserProductData = normalized;
+      cacheProductData(normalized, { job });
     } else if (job.type === 'product-affiliate' && normalized.productData) {
       latestBrowserProductData = normalized.productData;
+      cacheProductAffiliateResult(job, normalized);
+    } else if (job.type === 'affiliate-links') {
+      cacheAffiliateResult(job.input, normalized.affiliateLink || normalized);
+    } else if (job.type === 'affiliate-offer') {
+      setOfferCacheValue(job.input?.itemId, normalized.affiliateOffer || normalized);
     }
+    updateBatchForJob(job);
+    updateExtensionProfileAfterSuccess(job);
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -546,6 +756,9 @@ async function handleRequest(req, res) {
     if (job.workerProfileId) {
       upsertExtensionProfile({ profileId: job.workerProfileId, state: 'error', currentJobId: '' });
     }
+    updateBatchForJob(job);
+    updateExtensionProfileAfterFailure(job, job.error);
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -555,6 +768,7 @@ async function handleRequest(req, res) {
     assertAuthorized(req);
     const job = findExtensionJob(retryMatch[1]);
     resetExtensionJob(job, 'queued');
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -569,6 +783,8 @@ async function handleRequest(req, res) {
     job.status = 'cancelled';
     job.cancelledAt = new Date().toISOString();
     job.updatedAt = job.cancelledAt;
+    updateBatchForJob(job);
+    scheduleStoreSave();
     sendJson(res, 200, { ok: true, job });
     return;
   }
@@ -579,7 +795,14 @@ async function handleRequest(req, res) {
     const status = body.status ? String(body.status) : '';
     const before = extensionJobs.length;
     extensionJobs = status ? extensionJobs.filter((job) => job.status !== status) : [];
-    sendJson(res, 200, { ok: true, removed: before - extensionJobs.length, jobs: extensionJobs });
+    if (!status) batchRequests = [];
+    scheduleStoreSave();
+    sendJson(res, 200, {
+      ok: true,
+      removed: before - extensionJobs.length,
+      batchesCleared: status ? 0 : 1,
+      jobs: extensionJobs,
+    });
     return;
   }
 
@@ -660,6 +883,21 @@ async function login() {
 }
 
 function createExtensionJob(fields) {
+  const dedupeKey = normalizeText(fields.dedupeKey);
+  if (dedupeKey) {
+    const existing = extensionJobs.find((job) =>
+      job.dedupeKey === dedupeKey && ['queued', 'running'].includes(job.status),
+    );
+    if (existing) {
+      if (fields.batchId && !existing.batchId) {
+        existing.batchId = fields.batchId;
+        existing.updatedAt = new Date().toISOString();
+        scheduleStoreSave();
+      }
+      return { ...existing, reused: true };
+    }
+  }
+
   const now = new Date().toISOString();
   const job = {
     id: String(++extensionJobCounter),
@@ -668,19 +906,31 @@ function createExtensionJob(fields) {
     url: fields.url,
     input: fields.input,
     targetProfileId: normalizeProfileId(fields.targetProfileId || fields.profileId),
+    priority: normalizeJobPriority(fields.priority, fields.type),
+    mode: normalizeFetchMode(fields.mode),
+    dedupeKey,
+    batchId: fields.batchId || '',
     createdAt: now,
     updatedAt: now,
   };
   extensionJobs.push(job);
+  scheduleStoreSave();
   return job;
 }
 
-function createExtensionJobFromBody(body) {
+async function createExtensionJobFromBody(body) {
   const type = String(body.type || 'product-data');
   const targetProfileId = normalizeProfileId(body.targetProfileId || body.profileId);
   if (type === 'product-data' || type === 'product-info') {
     const input = normalizeProductInfoInput(body);
-    return createExtensionJob({ type, url: input.url, targetProfileId });
+    return createExtensionJob({
+      type,
+      url: input.url,
+      targetProfileId,
+      priority: numberFromQuery(body.priority, type === 'product-info' ? 70 : 60),
+      mode: normalizeFetchMode(body.mode),
+      dedupeKey: productDedupeKey(input.url, type, body.mode),
+    });
   }
   if (type === 'product-affiliate') {
     const productInput = normalizeProductInfoInput(body);
@@ -689,13 +939,46 @@ function createExtensionJobFromBody(body) {
       links: [productInput.url],
       link: undefined,
     });
-    return createExtensionJob({ type, url: productInput.url, input: linkInput, targetProfileId });
+    return createExtensionJob({
+      type,
+      url: productInput.url,
+      input: linkInput,
+      targetProfileId,
+      priority: numberFromQuery(body.priority, 90),
+      mode: normalizeFetchMode(body.mode),
+      dedupeKey: productAffiliateDedupeKey(productInput.url, linkInput, body.mode),
+    });
   }
   if (type === 'affiliate-links') {
-    return createExtensionJob({ type, input: normalizeInput(body), targetProfileId });
+    const input = normalizeInput(body);
+    return createExtensionJob({
+      type,
+      input,
+      targetProfileId,
+      priority: numberFromQuery(body.priority, 80),
+      dedupeKey: affiliateCacheKey(input),
+    });
+  }
+  if (type === 'affiliate-offer' || type === 'product-commission') {
+    const input = await normalizeAffiliateOfferInput(body);
+    return createExtensionJob({
+      type: 'affiliate-offer',
+      url: input.url,
+      input,
+      targetProfileId,
+      priority: numberFromQuery(body.priority, 85),
+      dedupeKey: affiliateOfferDedupeKey(input),
+    });
   }
   if (type === 'product-links') {
-    return createExtensionJob({ type, input: normalizeProductLinksInput(body), targetProfileId });
+    const input = normalizeProductLinksInput(body);
+    return createExtensionJob({
+      type,
+      input,
+      targetProfileId,
+      priority: numberFromQuery(body.priority, 50),
+      dedupeKey: `product-links:${hashKey(JSON.stringify(input))}`,
+    });
   }
   throw httpError(400, `Unsupported extension job type: ${type}`);
 }
@@ -719,10 +1002,16 @@ function upsertExtensionProfile(body) {
     state: normalizeText(body.state) || previous.state || 'online',
     extensionVersion: normalizeText(body.extensionVersion) || previous.extensionVersion || '',
     currentJobId: normalizeText(body.currentJobId) || '',
+    capabilities: normalizeCapabilities(body.capabilities || previous.capabilities),
+    cooldownUntil: previous.cooldownUntil || '',
+    errorCount: Number(previous.errorCount) || 0,
+    successCount: Number(previous.successCount) || 0,
+    lastError: previous.lastError || '',
     firstSeenAt: previous.firstSeenAt || now,
     lastSeenAt: now,
   };
   extensionProfiles.set(profileId, profile);
+  scheduleStoreSave();
   return profile;
 }
 
@@ -730,6 +1019,64 @@ function jobMatchesProfile(job, profileId) {
   const targetProfileId = normalizeProfileId(job.targetProfileId);
   if (!targetProfileId) return true;
   return Boolean(profileId) && targetProfileId === profileId;
+}
+
+function selectNextExtensionJob(profileId) {
+  if (profileId && profileIsCoolingDown(profileId)) return undefined;
+
+  const candidates = extensionJobs
+    .filter((row) => row.status === 'queued' && jobMatchesProfile(row, profileId))
+    .filter((row) => profileCanRunJob(profileId, row))
+    .sort((a, b) =>
+      normalizeJobPriority(b.priority, b.type) - normalizeJobPriority(a.priority, a.type)
+        || String(a.createdAt).localeCompare(String(b.createdAt)),
+    );
+  return candidates[0];
+}
+
+function profileIsCoolingDown(profileId) {
+  const profile = extensionProfiles.get(profileId);
+  if (!profile?.cooldownUntil) return false;
+  return Date.parse(profile.cooldownUntil) > Date.now();
+}
+
+function profileCanRunJob(profileId, job) {
+  if (!profileId) return true;
+  const profile = extensionProfiles.get(profileId);
+  const capabilities = normalizeCapabilities(profile?.capabilities);
+  if (!capabilities.length) return true;
+  if (job.type === 'affiliate-links' || job.type === 'affiliate-offer' || job.type === 'product-affiliate') {
+    return capabilities.includes('affiliate') || capabilities.includes(job.type) || capabilities.includes('all');
+  }
+  return capabilities.includes(job.type) || capabilities.includes('product') || capabilities.includes('all');
+}
+
+function updateExtensionProfileAfterSuccess(job) {
+  const profileId = normalizeProfileId(job.workerProfileId);
+  if (!profileId) return;
+  const profile = extensionProfiles.get(profileId) || upsertExtensionProfile({ profileId });
+  profile.state = 'completed';
+  profile.currentJobId = '';
+  profile.successCount = (Number(profile.successCount) || 0) + 1;
+  profile.errorCount = Math.max(0, (Number(profile.errorCount) || 0) - 1);
+  profile.cooldownUntil = '';
+  profile.lastSeenAt = new Date().toISOString();
+  extensionProfiles.set(profileId, profile);
+}
+
+function updateExtensionProfileAfterFailure(job, error) {
+  const profileId = normalizeProfileId(job.workerProfileId);
+  if (!profileId) return;
+  const profile = extensionProfiles.get(profileId) || upsertExtensionProfile({ profileId });
+  const errorCount = (Number(profile.errorCount) || 0) + 1;
+  const cooldownMs = Math.min(PROFILE_COOLDOWN_BASE_MS * 2 ** Math.min(errorCount - 1, 5), 30 * 60 * 1000);
+  profile.state = 'cooldown';
+  profile.currentJobId = '';
+  profile.errorCount = errorCount;
+  profile.lastError = String(error || '').slice(0, 300);
+  profile.cooldownUntil = new Date(Date.now() + cooldownMs).toISOString();
+  profile.lastSeenAt = new Date().toISOString();
+  extensionProfiles.set(profileId, profile);
 }
 
 function requeueStaleExtensionJobs() {
@@ -744,6 +1091,7 @@ function requeueStaleExtensionJobs() {
     job.startedAt = undefined;
     job.updatedAt = new Date().toISOString();
   }
+  scheduleStoreSave();
 }
 
 function normalizeProfileId(value) {
@@ -758,6 +1106,26 @@ function findExtensionJob(id) {
     throw httpError(404, 'Extension job not found.');
   }
   return job;
+}
+
+function normalizeJobPriority(value, type) {
+  const number = Number(value);
+  if (Number.isFinite(number)) return Math.max(0, Math.min(1000, Math.round(number)));
+  if (type === 'product-affiliate') return 90;
+  if (type === 'affiliate-links') return 80;
+  if (type === 'product-info' || type === 'product-data') return 70;
+  if (type === 'product-links') return 50;
+  return 10;
+}
+
+function normalizeFetchMode(value) {
+  const mode = String(value || 'fast').trim().toLowerCase();
+  return ['fast', 'full', 'deep'].includes(mode) ? mode : 'fast';
+}
+
+function normalizeCapabilities(value) {
+  const rows = Array.isArray(value) ? value : String(value || '').split(/[,\s]+/);
+  return [...new Set(rows.map((row) => String(row || '').trim()).filter(Boolean))];
 }
 
 function resetExtensionJob(job, status) {
@@ -820,6 +1188,33 @@ async function getProductData(input) {
   };
 }
 
+async function getAffiliateOfferData(input, options = {}) {
+  const cached = getFreshOfferCache(input.itemId, options);
+  if (cached && !options.forceRefresh) {
+    return {
+      source: 'cache',
+      cacheHit: true,
+      itemId: input.itemId,
+      shopId: input.shopId,
+      productKey: input.productKey,
+      affiliateOffer: cached.value,
+      cache: cached,
+    };
+  }
+
+  const affiliateOffer = await enqueue(() => getAffiliateProductOffer(input.itemId));
+  setOfferCacheValue(input.itemId, affiliateOffer);
+  scheduleStoreSave();
+  return {
+    source: 'browser',
+    cacheHit: false,
+    itemId: input.itemId,
+    shopId: input.shopId,
+    productKey: input.productKey,
+    affiliateOffer,
+  };
+}
+
 async function getProductId(input, options = {}) {
   const direct = extractProductIds(input.url);
   if (direct) {
@@ -847,6 +1242,449 @@ function formatProductIdResult(inputUrl, ids, resolvedUrl, resolved) {
     canonicalUrl: `https://shopee.vn/product/${ids.shopId}/${ids.itemId}`,
     resolved: Boolean(resolved),
   };
+}
+
+function getProductAffiliateCachedResult(url, input, options = {}) {
+  const productKey = productKeyFromUrl(url);
+  if (!productKey) return undefined;
+
+  const productEntry = getFreshProductCache(productKey, options);
+  const affiliateEntry = getFreshAffiliateCache(input, options);
+  const offerEntry = productEntry?.value?.itemId ? getFreshOfferCache(productEntry.value.itemId, options) : undefined;
+  const missing = [];
+  if (!productEntry) missing.push('productData');
+  if (!affiliateEntry) missing.push('affiliateLink');
+  if (!offerEntry) missing.push('affiliateOffer');
+  if (missing.length) return undefined;
+
+  return {
+    source: 'cache',
+    productKey,
+    productData: productEntry.value,
+    affiliateLink: affiliateEntry.value,
+    affiliateOffer: offerEntry.value,
+    missing: [],
+    cache: {
+      productUpdatedAt: productEntry.updatedAt,
+      affiliateUpdatedAt: affiliateEntry.updatedAt,
+      offerUpdatedAt: offerEntry.updatedAt,
+    },
+  };
+}
+
+function createProductAffiliateBatch(body) {
+  const input = normalizeProductAffiliateBatchInput(body);
+  const batchId = `batch-${++batchCounter}`;
+  const cached = [];
+  const jobs = [];
+  const subIds = input.subIds;
+  const now = new Date().toISOString();
+
+  for (const url of input.links) {
+    const linkInput = normalizeInput({ links: [url], subIds });
+    const cachedResult = getProductAffiliateCachedResult(url, linkInput, {
+      mode: input.mode,
+      allowStale: input.allowStale,
+    });
+    if (cachedResult && !input.forceRefresh) {
+      cached.push({ url, ...cachedResult });
+      continue;
+    }
+    jobs.push(createExtensionJob({
+      type: 'product-affiliate',
+      url,
+      input: linkInput,
+      targetProfileId: input.targetProfileId,
+      priority: input.priority,
+      mode: input.mode,
+      batchId,
+      dedupeKey: productAffiliateDedupeKey(url, linkInput, input.mode),
+    }));
+  }
+
+  const batch = {
+    id: batchId,
+    type: 'product-affiliate-batch',
+    status: jobs.length ? 'queued' : 'completed',
+    mode: input.mode,
+    total: input.links.length,
+    cachedCount: cached.length,
+    jobIds: jobs.map((job) => job.id),
+    cached,
+    createdAt: now,
+    updatedAt: now,
+  };
+  batchRequests.push(batch);
+  scheduleStoreSave();
+  return { batch, cached, jobs, count: jobs.length, cachedCount: cached.length };
+}
+
+function getBatchProgress(batchId) {
+  const batch = batchRequests.find((row) => row.id === batchId);
+  if (!batch) return undefined;
+  const jobs = batch.jobIds.map((id) => extensionJobs.find((job) => job.id === id)).filter(Boolean);
+  const counts = countBy(jobs, (job) => job.status);
+  const completed = Number(counts.completed || 0) + Number(batch.cachedCount || 0);
+  const failed = Number(counts.failed || 0);
+  const cancelled = Number(counts.cancelled || 0);
+  const done = completed + failed + cancelled;
+  const status = done >= batch.total
+    ? failed || cancelled ? 'completed_with_errors' : 'completed'
+    : counts.running ? 'running' : 'queued';
+  return {
+    ...batch,
+    status,
+    progress: {
+      total: batch.total,
+      cached: batch.cachedCount,
+      queued: Number(counts.queued || 0),
+      running: Number(counts.running || 0),
+      completed,
+      failed,
+      cancelled,
+      done,
+      percent: batch.total ? Math.round((done / batch.total) * 100) : 100,
+    },
+    jobs,
+    results: [
+      ...(batch.cached || []),
+      ...jobs.filter((job) => job.result).map((job) => ({ jobId: job.id, result: job.result })),
+    ],
+  };
+}
+
+function updateBatchForJob(job) {
+  if (!job.batchId) return;
+  const batch = batchRequests.find((row) => row.id === job.batchId);
+  if (!batch) return;
+  batch.updatedAt = new Date().toISOString();
+  const progress = getBatchProgress(batch.id);
+  if (progress) batch.status = progress.status;
+}
+
+function getAdminOverview() {
+  const extensionCounts = countBy(extensionJobs, (job) => job.status || 'unknown');
+  const facebookCounts = countBy(facebookJobs, (job) => job.status || 'unknown');
+  const recentExtensionJobs = extensionJobs.slice(-8).reverse().map(summarizeExtensionJob);
+  const recentFacebookJobs = facebookJobs.slice(-8).reverse().map(summarizeFacebookJob);
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    server: {
+      host: HOST,
+      port: PORT,
+      tokenRequired: Boolean(API_TOKEN),
+    },
+    totals: {
+      extensionJobs: extensionJobs.length,
+      facebookJobs: facebookJobs.length,
+      queued: Number(extensionCounts.queued || 0) + Number(facebookCounts.queued || 0),
+      running: Number(extensionCounts.running || 0) + Number(facebookCounts.running || 0),
+      completed: Number(extensionCounts.completed || 0)
+        + Number(facebookCounts.completed || 0)
+        + Number(facebookCounts.published || 0)
+        + Number(facebookCounts.commented || 0),
+      failed: Number(extensionCounts.failed || 0) + Number(facebookCounts.failed || 0),
+      profiles: extensionProfiles.size,
+      facebookProfiles: facebookProfiles.size,
+      batches: batchRequests.length,
+    },
+    cache: {
+      products: productCache.size,
+      affiliateLinks: affiliateLinkCache.size,
+      offers: offerCache.size,
+    },
+    profiles: [...extensionProfiles.values()]
+      .sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))
+      .slice(0, 12)
+      .map(summarizeProfile),
+    facebookProfiles: [...facebookProfiles.values()]
+      .sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))
+      .slice(0, 8)
+      .map(summarizeProfile),
+    batches: batchRequests.slice(-8).reverse().map(summarizeBatch),
+    recentJobs: [...recentFacebookJobs, ...recentExtensionJobs]
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .slice(0, 12),
+  };
+}
+
+function summarizeExtensionJob(job) {
+  const preview = summarizeJobResultPreview(job.result);
+  return {
+    id: job.id,
+    source: 'shopee',
+    type: job.type,
+    status: job.status,
+    url: job.url || job.input?.url || job.input?.links?.[0] || '',
+    target: job.input?.keyword || job.input?.categoryUrl || job.input?.url || job.url || job.input?.links?.[0] || '',
+    targetProfileId: job.targetProfileId || '',
+    workerProfileId: job.workerProfileId || '',
+    priority: job.priority,
+    mode: job.mode,
+    batchId: job.batchId || '',
+    hasResult: Boolean(job.result),
+    resultPreview: preview,
+    error: job.error || '',
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+function summarizeFacebookJob(job) {
+  return {
+    id: job.id,
+    source: 'facebook',
+    type: job.type,
+    status: job.status,
+    target: job.targetUrl || job.targetPostUrl || '',
+    targetProfileId: job.targetProfileId || '',
+    workerProfileId: job.workerProfileId || '',
+    publishMode: job.publishMode,
+    scheduledAt: job.scheduledAt || '',
+    hasResult: Boolean(job.result),
+    resultPreview: {
+      name: job.result?.facebookPostUrl || job.result?.commentUrl || job.affiliateLink || '',
+      affiliateLink: job.affiliateLink || job.result?.affiliateLink || '',
+      facebookPostUrl: job.result?.facebookPostUrl || '',
+      facebookWrappedShopeeLink: job.result?.facebookWrappedShopeeLink || '',
+    },
+    error: job.error || '',
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+function summarizeBatch(batch) {
+  const progress = getBatchProgress(batch.id);
+  return {
+    id: batch.id,
+    type: batch.type,
+    status: progress?.status || batch.status,
+    mode: batch.mode,
+    total: batch.total,
+    cachedCount: batch.cachedCount,
+    jobCount: batch.jobIds?.length || 0,
+    progress: progress?.progress,
+    createdAt: batch.createdAt,
+    updatedAt: batch.updatedAt,
+  };
+}
+
+function summarizeProfile(profile) {
+  return {
+    id: profile.id || profile.profileId,
+    profileId: profile.profileId || profile.id,
+    profileName: profile.profileName || profile.name || profile.id,
+    state: profile.state || 'online',
+    currentJobId: profile.currentJobId || '',
+    capabilities: profile.capabilities || [],
+    successCount: Number(profile.successCount) || 0,
+    errorCount: Number(profile.errorCount) || 0,
+    cooldownUntil: profile.cooldownUntil || '',
+    lastError: profile.lastError || '',
+    lastSeenAt: profile.lastSeenAt || '',
+  };
+}
+
+function summarizeJobResultPreview(result) {
+  if (!result || typeof result !== 'object') return {};
+  const productData = result.productData || result.product || result;
+  const product = productData.product || productData;
+  const affiliateOffer = result.affiliateOffer || result;
+  const bestCommission = affiliateOffer?.bestCommission || {};
+  const affiliateLink = result.affiliateLink?.links?.[0]?.shortLink
+    || result.affiliateLink?.shortLink
+    || result.links?.[0]?.shortLink
+    || '';
+  return {
+    name: product?.name || productData?.name || '',
+    shopName: product?.shop?.name || productData?.shop?.name || '',
+    price: product?.salePrice || product?.price || productData?.salePrice || productData?.price || '',
+    sold: product?.sold || productData?.sold || '',
+    rating: product?.rating || productData?.rating || '',
+    imageCount: Array.isArray(product?.images) ? product.images.length : 0,
+    videoCount: Array.isArray(product?.videos) ? product.videos.length : 0,
+    commissionRate: affiliateOffer?.commissionRate || bestCommission.sellerCommission || '',
+    commission: affiliateOffer?.commission || bestCommission.estimatedCommissionAmount || '',
+    offerAvailable: affiliateOffer?.available,
+    affiliateLink,
+    facebookPostUrl: result.facebookPostUrl || '',
+    facebookWrappedShopeeLink: result.facebookWrappedShopeeLink || '',
+  };
+}
+
+function normalizeProductAffiliateBatchInput(body) {
+  const rawLinks = Array.isArray(body.links)
+    ? body.links
+    : Array.isArray(body.urls)
+      ? body.urls
+      : body.url || body.link
+        ? [body.url || body.link]
+        : [];
+  const links = dedupeBy(rawLinks.map((url) => String(url || '').trim()).filter(Boolean), (url) => url);
+  if (!links.length) throw httpError(400, '`links` or `urls` is required.');
+  const subIds = SUB_ID_KEYS.map((key, index) => String(body[key] ?? body.subIds?.[index] ?? '').trim());
+  for (const subId of subIds) {
+    if (subId && !/^[a-zA-Z0-9]{1,50}$/.test(subId)) {
+      throw httpError(400, 'Sub IDs must be alphanumeric and up to 50 characters.');
+    }
+  }
+  return {
+    links,
+    subIds,
+    mode: normalizeFetchMode(body.mode || 'fast'),
+    forceRefresh: Boolean(body.forceRefresh),
+    allowStale: Boolean(body.allowStale),
+    targetProfileId: normalizeProfileId(body.targetProfileId || body.profileId),
+    priority: numberFromQuery(body.priority, 100),
+  };
+}
+
+function cacheProductAffiliateResult(job, result) {
+  if (result.productData) cacheProductData(result.productData, { job });
+  if (result.affiliateOffer && result.productData?.itemId) {
+    setOfferCacheValue(result.productData.itemId, result.affiliateOffer);
+  }
+  if (result.affiliateLink) {
+    cacheAffiliateResult(job.input, result.affiliateLink);
+  }
+}
+
+function cacheProductData(productData, meta = {}) {
+  if (!productData || typeof productData !== 'object') return;
+  const productKey = productKeyFromProduct(productData);
+  if (!productKey) return;
+  const now = new Date().toISOString();
+  const previous = productCache.get(productKey) || {};
+  productCache.set(productKey, {
+    ...previous,
+    key: productKey,
+    value: productData,
+    source: meta.source || meta.job?.type || previous.source || 'extension',
+    mode: meta.job?.mode || previous.mode || 'fast',
+    updatedAt: now,
+    expiresAt: new Date(Date.now() + productCacheTtlFor(productData)).toISOString(),
+  });
+}
+
+function cacheAffiliateResult(input, value) {
+  if (!input || !value) return;
+  const key = affiliateCacheKey(input);
+  affiliateLinkCache.set(key, {
+    key,
+    value,
+    input: {
+      links: input.links,
+      subIds: input.subIds,
+    },
+    updatedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + AFFILIATE_CACHE_TTL_MS).toISOString(),
+  });
+}
+
+function setOfferCacheValue(itemId, value) {
+  if (!itemId || !value) return;
+  const key = String(itemId);
+  offerCache.set(key, {
+    key,
+    value,
+    updatedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + OFFER_CACHE_TTL_MS).toISOString(),
+  });
+}
+
+function getFreshProductCache(keyOrUrl, options = {}) {
+  const key = normalizeProductCacheKey(keyOrUrl);
+  if (!key) return undefined;
+  return freshCacheEntry(productCache.get(key), options.allowStale);
+}
+
+function getFreshAffiliateCache(input, options = {}) {
+  return freshCacheEntry(affiliateLinkCache.get(affiliateCacheKey(input)), options.allowStale);
+}
+
+function getFreshOfferCache(itemId, options = {}) {
+  return freshCacheEntry(offerCache.get(String(itemId || '')), options.allowStale);
+}
+
+function freshCacheEntry(entry, allowStale) {
+  if (!entry) return undefined;
+  if (allowStale) return entry;
+  const expiresAt = Date.parse(entry.expiresAt || '');
+  if (Number.isFinite(expiresAt) && expiresAt < Date.now()) return undefined;
+  return entry;
+}
+
+function clearCache(body = {}) {
+  const target = String(body.target || body.type || 'all').trim().toLowerCase();
+  const before = {
+    products: productCache.size,
+    affiliateLinks: affiliateLinkCache.size,
+    offers: offerCache.size,
+  };
+  if (target === 'all' || target === 'products') productCache.clear();
+  if (target === 'all' || target === 'affiliate' || target === 'affiliate-links') affiliateLinkCache.clear();
+  if (target === 'all' || target === 'offers' || target === 'commission') offerCache.clear();
+  return {
+    before,
+    after: {
+      products: productCache.size,
+      affiliateLinks: affiliateLinkCache.size,
+      offers: offerCache.size,
+    },
+  };
+}
+
+function productCacheTtlFor(productData) {
+  const hasDynamic = productData.price || productData.salePrice || productData.sold || productData.rating;
+  return hasDynamic ? PRODUCT_CACHE_TTL_MS : PRODUCT_STATIC_CACHE_TTL_MS;
+}
+
+function productKeyFromProduct(product) {
+  if (!product) return '';
+  const shopId = product.shopId || product.shop_id || product.shop?.id;
+  const itemId = product.itemId || product.item_id;
+  return shopId && itemId ? `${shopId}.${itemId}` : productKeyFromUrl(product.url || product.resolvedUrl || product.inputUrl);
+}
+
+function productKeyFromUrl(url) {
+  const ids = extractProductIds(url);
+  return ids ? `${ids.shopId}.${ids.itemId}` : '';
+}
+
+function normalizeProductCacheKey(value) {
+  const text = String(value || '').trim();
+  if (/^\d+\.\d+$/.test(text)) return text;
+  return productKeyFromUrl(text);
+}
+
+function affiliateCacheKey(input) {
+  const links = Array.isArray(input?.links) ? input.links : input?.link ? [input.link] : [];
+  const subIds = SUB_ID_KEYS.map((key, index) => String(input?.[key] ?? input?.subIds?.[index] ?? '').trim());
+  return `affiliate:${hashKey(JSON.stringify({ links: links.map(String), subIds }))}`;
+}
+
+function productDedupeKey(url, type, mode) {
+  return `${type || 'product'}:${normalizeFetchMode(mode)}:${productKeyFromUrl(url) || hashKey(url)}`;
+}
+
+function productAffiliateDedupeKey(url, input, mode) {
+  return `product-affiliate:${normalizeFetchMode(mode)}:${productKeyFromUrl(url) || hashKey(url)}:${affiliateCacheKey(input)}`;
+}
+
+function affiliateOfferDedupeKey(input) {
+  return `affiliate-offer:${input.itemId || input.productKey || hashKey(input.url)}`;
+}
+
+function hashKey(value) {
+  const text = String(value || '');
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function createFacebookPostEmbed(body) {
@@ -888,6 +1726,7 @@ function createAiDiagnosticReport(body) {
   report.analysis = analyzeAiDiagnosticReport(report);
   aiDiagnostics.push(report);
   if (aiDiagnostics.length > 200) aiDiagnostics = aiDiagnostics.slice(-200);
+  scheduleStoreSave();
   return report;
 }
 
@@ -993,6 +1832,7 @@ function createFacebookJobFromBody(body) {
     updatedAt: now,
   };
   facebookJobs.push(job);
+  scheduleStoreSave();
   return job;
 }
 
@@ -1097,6 +1937,7 @@ function upsertFacebookProfile(body) {
     lastSeenAt: now,
   };
   facebookProfiles.set(profileId, profile);
+  scheduleStoreSave();
   return profile;
 }
 
@@ -1800,6 +2641,47 @@ function normalizeProductIdBatchInput(body) {
   return inputs;
 }
 
+async function normalizeAffiliateOfferInput(body) {
+  const explicitItemId = String(body.itemId || body.item_id || '').trim();
+  const explicitShopId = String(body.shopId || body.shop_id || '').trim();
+  const url = String(body.url || body.link || '').trim();
+
+  if (explicitItemId) {
+    return {
+      url,
+      shopId: explicitShopId || extractProductIds(url)?.shopId || '',
+      itemId: explicitItemId,
+      productKey: explicitShopId ? `${explicitShopId}.${explicitItemId}` : productKeyFromUrl(url),
+    };
+  }
+
+  const direct = extractProductIds(url);
+  if (direct) {
+    return {
+      url,
+      shopId: String(direct.shopId),
+      itemId: String(direct.itemId),
+      productKey: `${direct.shopId}.${direct.itemId}`,
+    };
+  }
+
+  if (!url) {
+    throw httpError(400, '`itemId` or `url` is required.');
+  }
+
+  if (!body.resolve) {
+    throw httpError(400, 'Cannot detect itemId from URL. Retry with `resolve: true` or pass `itemId` directly.');
+  }
+
+  const resolved = await resolveProductIds(url);
+  return {
+    url: resolved.url || url,
+    shopId: String(resolved.shopId),
+    itemId: String(resolved.itemId),
+    productKey: `${resolved.shopId}.${resolved.itemId}`,
+  };
+}
+
 function normalizeProductLinksInput(body) {
   const keyword = String(body.keyword || body.query || '').trim();
   const url = String(body.url || '').trim();
@@ -2103,6 +2985,79 @@ function enqueue(task) {
   return next;
 }
 
+async function loadPersistentStore() {
+  try {
+    const raw = await readFile(STORE_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    extensionJobs = Array.isArray(data.extensionJobs) ? data.extensionJobs : extensionJobs;
+    extensionJobCounter = Math.max(Number(data.extensionJobCounter) || 0, maxNumericId(extensionJobs));
+    extensionProfiles = new Map((data.extensionProfiles || []).map((profile) => [profile.profileId || profile.id, profile]));
+    facebookJobs = Array.isArray(data.facebookJobs) ? data.facebookJobs : facebookJobs;
+    facebookJobCounter = Math.max(Number(data.facebookJobCounter) || 0, maxFacebookJobId(facebookJobs));
+    facebookProfiles = new Map((data.facebookProfiles || []).map((profile) => [profile.profileId || profile.id, profile]));
+    productCache = new Map(Object.entries(data.productCache || {}));
+    affiliateLinkCache = new Map(Object.entries(data.affiliateLinkCache || {}));
+    offerCache = new Map(Object.entries(data.offerCache || {}));
+    batchRequests = Array.isArray(data.batchRequests) ? data.batchRequests : [];
+    batchCounter = Math.max(Number(data.batchCounter) || 0, maxBatchId(batchRequests));
+    aiDiagnostics = Array.isArray(data.aiDiagnostics) ? data.aiDiagnostics.slice(-200) : [];
+    latestBrowserProductData = data.latestBrowserProductData;
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`[store] Could not load ${STORE_FILE}: ${error.message}`);
+    }
+  }
+}
+
+function scheduleStoreSave() {
+  clearTimeout(storeSaveTimer);
+  storeSaveTimer = setTimeout(() => {
+    savePersistentStore().catch((error) => console.warn(`[store] Could not save: ${error.message}`));
+  }, 250);
+}
+
+async function savePersistentStore() {
+  await mkdir(DATA_DIR, { recursive: true });
+  const payload = {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    extensionJobCounter,
+    extensionJobs: extensionJobs.slice(-1000),
+    extensionProfiles: [...extensionProfiles.values()],
+    facebookJobCounter,
+    facebookJobs: facebookJobs.slice(-1000),
+    facebookProfiles: [...facebookProfiles.values()],
+    aiDiagnostics: aiDiagnostics.slice(-200),
+    productCache: Object.fromEntries(productCache),
+    affiliateLinkCache: Object.fromEntries(affiliateLinkCache),
+    offerCache: Object.fromEntries(offerCache),
+    batchCounter,
+    batchRequests: batchRequests.slice(-200),
+    latestBrowserProductData,
+  };
+  const tempFile = `${STORE_FILE}.tmp`;
+  await writeFile(tempFile, JSON.stringify(payload, null, 2));
+  await rename(tempFile, STORE_FILE);
+}
+
+function maxNumericId(rows) {
+  return rows.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0);
+}
+
+function maxFacebookJobId(rows) {
+  return rows.reduce((max, row) => {
+    const match = String(row.id || '').match(/^fb-(\d+)$/);
+    return Math.max(max, match ? Number(match[1]) : 0);
+  }, 0);
+}
+
+function maxBatchId(rows) {
+  return rows.reduce((max, row) => {
+    const match = String(row.id || '').match(/^batch-(\d+)$/);
+    return Math.max(max, match ? Number(match[1]) : 0);
+  }, 0);
+}
+
 function assertAuthorized(req) {
   if (!API_TOKEN) return;
   const auth = req.headers.authorization || '';
@@ -2132,6 +3087,45 @@ function sendJson(res, statusCode, payload) {
     'content-type': 'application/json; charset=utf-8',
   });
   res.end(statusCode === 204 ? '' : JSON.stringify(payload));
+}
+
+function sendRedirect(res, location) {
+  res.writeHead(302, {
+    location,
+    'cache-control': 'no-store',
+  });
+  res.end('');
+}
+
+async function serveAdminAsset(pathname, res) {
+  const relativePath = pathname === '/admin/' ? 'index.html' : pathname.replace(/^\/admin\//, '');
+  const safeRelativePath = path.normalize(relativePath).replace(/^(\.\.(\/|\\|$))+/, '');
+  const filePath = path.join(ADMIN_DIR, safeRelativePath);
+  if (!filePath.startsWith(ADMIN_DIR)) {
+    sendJson(res, 403, { ok: false, error: 'Forbidden' });
+    return;
+  }
+
+  try {
+    const content = await readFile(filePath);
+    res.writeHead(200, {
+      'cache-control': safeRelativePath === 'index.html' ? 'no-store' : 'public, max-age=60',
+      'content-type': contentTypeFor(filePath),
+    });
+    res.end(content);
+  } catch {
+    sendJson(res, 404, { ok: false, error: 'Admin asset not found' });
+  }
+}
+
+function contentTypeFor(filePath) {
+  const extname = path.extname(filePath).toLowerCase();
+  if (extname === '.html') return 'text/html; charset=utf-8';
+  if (extname === '.css') return 'text/css; charset=utf-8';
+  if (extname === '.js') return 'text/javascript; charset=utf-8';
+  if (extname === '.svg') return 'image/svg+xml';
+  if (extname === '.json') return 'application/json; charset=utf-8';
+  return 'application/octet-stream';
 }
 
 function httpError(statusCode, message) {
@@ -2164,6 +3158,14 @@ function dedupeBy(items, keyFn) {
     rows.push(item);
   }
   return rows;
+}
+
+function countBy(items, keyFn) {
+  return items.reduce((counts, item) => {
+    const key = keyFn(item);
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
 }
 
 function escapeAttribute(value) {

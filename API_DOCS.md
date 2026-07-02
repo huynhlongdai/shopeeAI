@@ -15,6 +15,27 @@ Content-Type: application/json
 
 Nên dùng nhóm `/api/shopee/extension/*` cho Shopee vì job chạy trong Chrome thật, dùng cookie/session/extension hiện có.
 
+## Admin UI
+
+### GET /
+
+Redirect sang giao diện quản trị server:
+
+```text
+http://127.0.0.1:8787/admin/
+```
+
+Extension bây giờ chỉ đóng vai trò bridge/worker. Tạo job, xem hàng đợi, kết quả, cache, profile và batch nên thao tác trong Admin UI trên server để tránh dồn UI nặng vào extension.
+
+### GET /api/admin/overview
+
+Trả summary nhẹ cho dashboard: số job, cache, profile, batch gần đây và trạng thái server.
+
+```bash
+curl http://127.0.0.1:8787/api/admin/overview \
+  -H "authorization: Bearer change-me"
+```
+
 ## Health
 
 ### GET /health
@@ -102,6 +123,7 @@ Các `type` hỗ trợ:
 
 - `product-info`: lấy thông tin sản phẩm.
 - `product-affiliate`: lấy thông tin sản phẩm, hoàn phí/commission, affiliate link.
+- `affiliate-offer`: nên dùng endpoint riêng `/api/shopee/extension/affiliate-offer` để lấy hoa hồng/commission.
 - `product-links`: lấy link sản phẩm từ keyword, search URL, hoặc category URL.
 - `affiliate-links`: chuyển link thường sang affiliate link.
 
@@ -126,6 +148,7 @@ Query:
 
 - `limit`: mặc định 100, tối đa 500.
 - `status`: `queued`, `running`, `completed`, `failed`, `cancelled`.
+- `light=1`: chỉ trả metadata và preview, không trả JSON result lớn. Khuyến nghị dùng cho UI danh sách.
 
 ```bash
 curl "http://127.0.0.1:8787/api/shopee/extension/jobs/created?limit=100&status=completed" \
@@ -156,6 +179,138 @@ Xóa job theo trạng thái.
 ```json
 { "status": "completed" }
 ```
+
+### GET /api/shopee/extension/batches/<batchId>
+
+Xem tiến trình batch fast-mode, gồm số cached/queued/running/completed/failed và kết quả đã có.
+
+```bash
+curl http://127.0.0.1:8787/api/shopee/extension/batches/batch-1 \
+  -H "authorization: Bearer change-me"
+```
+
+## Fast Batch + Cache
+
+Các endpoint này tối ưu tốc độ bằng cache, de-dup job đang chạy, priority queue và chia job cho profile rảnh.
+
+### GET /api/shopee/affiliate-offer
+
+Lấy thông tin hoa hồng/commission của sản phẩm bằng server browser session. Có thể truyền `itemId` trực tiếp hoặc URL sản phẩm.
+
+```bash
+curl "http://127.0.0.1:8787/api/shopee/affiliate-offer?itemId=25400104317" \
+  -H "authorization: Bearer change-me"
+```
+
+Với URL:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/shopee/affiliate-offer \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer change-me" \
+  -d '{
+    "url": "https://shopee.vn/product-name-i.30674096.25400104317"
+  }'
+```
+
+Response trả `affiliateOffer`, gồm `available`, `commissionRate`, `commission`, `status`, `productName`, `shopName`, và `raw` nếu Shopee trả dữ liệu.
+
+### POST /api/shopee/extension/affiliate-offer
+
+Khuyến nghị dùng endpoint này khi muốn lấy hoa hồng qua Chrome profile thật đang đăng nhập Shopee Affiliate. Server sẽ tạo job `affiliate-offer`; extension mở trang product offer, lấy bảng commission, cache kết quả và trả về job result.
+
+```json
+{
+  "url": "https://shopee.vn/product-name-i.30674096.25400104317",
+  "targetProfileId": "profile-1",
+  "forceRefresh": false,
+  "allowStale": false
+}
+```
+
+Nếu đã có cache offer còn hạn, endpoint trả kết quả ngay với `cacheHit: true`.
+
+### POST /api/shopee/extension/product-affiliate-fast
+
+Tạo job lấy nhanh thông tin sản phẩm + hoa hồng + affiliate link. Nếu cache còn mới, server trả kết quả ngay mà không tạo job mới.
+
+```json
+{
+  "url": "https://shopee.vn/abc-i.233958535.7167929427",
+  "subId1": "n8n",
+  "mode": "fast",
+  "priority": 100,
+  "allowStale": false,
+  "forceRefresh": false
+}
+```
+
+Response có thể là cache hit:
+
+```json
+{
+  "ok": true,
+  "cacheHit": true,
+  "source": "cache",
+  "productKey": "233958535.7167929427",
+  "productData": {},
+  "affiliateOffer": {},
+  "affiliateLink": {}
+}
+```
+
+Hoặc tạo/reuse job:
+
+```json
+{
+  "ok": true,
+  "cacheHit": false,
+  "reused": false,
+  "job": {
+    "id": "12",
+    "type": "product-affiliate",
+    "priority": 100,
+    "mode": "fast"
+  }
+}
+```
+
+### POST /api/shopee/extension/product-affiliate-batch
+
+Tạo batch nhiều sản phẩm. Server tự trả cached result trước, còn thiếu mới chia thành job cho extension profiles.
+
+```json
+{
+  "links": [
+    "https://shopee.vn/abc-i.233958535.7167929427",
+    "https://shopee.vn/product/30674096/25400104317"
+  ],
+  "subId1": "n8n",
+  "mode": "fast",
+  "priority": 100
+}
+```
+
+### GET /api/shopee/cache/product/<productKey>
+
+Đọc cache sản phẩm theo `shopId.itemId`.
+
+```bash
+curl http://127.0.0.1:8787/api/shopee/cache/product/233958535.7167929427 \
+  -H "authorization: Bearer change-me"
+```
+
+### POST /api/shopee/cache/clear
+
+Xóa cache theo nhóm.
+
+```json
+{ "target": "products" }
+```
+
+`target` hỗ trợ: `all`, `products`, `affiliate-links`, `offers`.
+
+Cache được lưu ở `.shopeeai-data/store.json` và không commit lên GitHub.
 
 ## Product Info
 

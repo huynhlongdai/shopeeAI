@@ -22,6 +22,12 @@ Default URL:
 http://127.0.0.1:8787
 ```
 
+Admin UI:
+
+```text
+http://127.0.0.1:8787/admin/
+```
+
 Health check:
 
 ```bash
@@ -48,7 +54,7 @@ Stop process using port 8787:
 lsof -ti tcp:8787 | xargs kill
 ```
 
-After server restarts, refresh the extension Manager page and keep:
+After server restarts, open the server Admin UI and keep the extension configured with:
 
 ```text
 API Base: http://127.0.0.1:8787
@@ -80,7 +86,7 @@ Then start the server and connect with:
 http://<server-ip>:8787
 ```
 
-In every Chrome profile extension Manager, set:
+In every Chrome profile extension popup/options, set:
 
 ```text
 API Base: http://<server-ip>:8787
