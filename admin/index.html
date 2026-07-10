@@ -21,6 +21,7 @@
           <a href="#jobs">Jobs</a>
           <a href="#result">Result</a>
           <a href="#profiles">Profiles</a>
+          <a href="#agent-ops">Agent Ops</a>
           <a href="/health" target="_blank">Health</a>
         </nav>
         <section class="mini-panel">
@@ -124,8 +125,9 @@
               <div class="grid-2">
                 <label>Publish mode
                   <select id="facebookPublishMode">
-                    <option value="auto">Auto</option>
-                    <option value="draft">Draft</option>
+	                    <option value="auto">Auto</option>
+	                    <option value="test">Test fill</option>
+	                    <option value="draft">Draft</option>
                     <option value="confirm">Confirm</option>
                     <option value="manual">Manual</option>
                   </select>
@@ -211,6 +213,61 @@
           </div>
           <div id="profileGrid" class="profile-grid"></div>
           <div id="batchList" class="batch-list"></div>
+        </section>
+
+        <section class="panel agent-panel" id="agent-ops">
+          <div class="panel-head">
+            <div>
+              <h2>Agent operations</h2>
+              <p>Copy-ready API context for another AI agent or automation runner.</p>
+            </div>
+            <div class="toolbar">
+              <button id="copyAgentContext" class="ghost">Copy agent context</button>
+              <button id="copyCurlPack" class="ghost">Copy curl pack</button>
+              <button id="loadAgentManifest">Load manifest</button>
+            </div>
+          </div>
+
+          <div class="agent-grid">
+            <article class="ops-card">
+              <span>API base</span>
+              <strong id="agentApiBase">-</strong>
+            </article>
+            <article class="ops-card">
+              <span>Auth header</span>
+              <strong id="agentAuthHeader">authorization: Bearer &lt;API_TOKEN&gt;</strong>
+            </article>
+            <article class="ops-card">
+              <span>Worker requirement</span>
+              <strong>At least one extension profile online</strong>
+            </article>
+          </div>
+
+          <div class="agent-columns">
+            <section class="soft-block">
+              <div class="panel-head compact">
+                <h3>Agent handoff prompt</h3>
+                <span class="badge muted-badge">Copy/paste</span>
+              </div>
+              <textarea id="agentPrompt" rows="14" readonly></textarea>
+            </section>
+
+            <section class="soft-block">
+              <div class="panel-head compact">
+                <h3>Endpoint checklist</h3>
+                <span class="badge muted-badge">Ops</span>
+              </div>
+              <div id="agentEndpointList" class="endpoint-list"></div>
+            </section>
+          </div>
+
+          <div class="soft-block">
+            <div class="panel-head compact">
+              <h3>Manifest JSON</h3>
+              <span class="badge muted-badge">GET /api/agent/manifest</span>
+            </div>
+            <pre id="agentManifestJson">{}</pre>
+          </div>
         </section>
       </main>
     </div>

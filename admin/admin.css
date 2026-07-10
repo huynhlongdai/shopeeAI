@@ -472,6 +472,94 @@ pre {
   font-size: 12px;
 }
 
+.agent-panel {
+  gap: 16px;
+}
+
+.agent-grid,
+.agent-columns {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-columns {
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr);
+}
+
+.ops-card {
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.ops-card span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ops-card strong {
+  overflow-wrap: anywhere;
+}
+
+#agentPrompt {
+  min-height: 360px;
+}
+
+#agentManifestJson {
+  max-height: 520px;
+}
+
+.endpoint-list {
+  display: grid;
+  gap: 8px;
+}
+
+.endpoint-row {
+  align-items: center;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 54px minmax(0, 1fr);
+  padding: 9px;
+}
+
+.endpoint-row strong {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  grid-column: 2;
+}
+
+.endpoint-row code {
+  overflow-wrap: anywhere;
+}
+
+.endpoint-method {
+  align-items: center;
+  background: #e9fbf4;
+  border-radius: 999px;
+  color: var(--green);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  justify-content: center;
+  padding: 4px 7px;
+}
+
+.endpoint-method.post {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
 #toast {
   background: #171720;
   border-radius: 8px;
@@ -495,7 +583,9 @@ pre {
   }
 
   .profile-grid,
-  .batch-list {
+  .batch-list,
+  .agent-grid,
+  .agent-columns {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -526,7 +616,9 @@ pre {
   .summary-grid,
   .quick-actions,
   .profile-grid,
-  .batch-list {
+  .batch-list,
+  .agent-grid,
+  .agent-columns {
     grid-template-columns: 1fr;
   }
 

@@ -109,6 +109,12 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && pathname === '/api/agent/manifest') {
+    assertAuthorized(req);
+    sendJson(res, 200, getAgentManifest(req));
+    return;
+  }
+
   if (req.method === 'POST' && pathname === '/api/shopee/affiliate-links') {
     assertAuthorized(req);
     const body = await readJson(req);
@@ -279,7 +285,7 @@ async function handleRequest(req, res) {
     const jobs = status ? facebookJobs.filter((job) => job.status === status) : facebookJobs;
     sendJson(res, 200, {
       ok: true,
-      jobs: jobs.slice(-limit).reverse().map((job) => light ? summarizeFacebookJob(job) : job),
+      jobs: jobs.slice(-limit).reverse().map((job) => light ? summarizeFacebookJob(job) : normalizeFacebookJobForResponse(job)),
       total: jobs.length,
     });
     return;
@@ -335,7 +341,7 @@ async function handleRequest(req, res) {
     const job = findFacebookJob(facebookReadyMatch[1]);
     const body = await readJson(req);
     job.status = normalizeFacebookReadyStatus(body.status);
-    job.result = { ...(job.result || {}), ...body };
+    job.result = normalizeFacebookResult({ ...(job.result || {}), ...body }, job);
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.updatedAt = new Date().toISOString();
     if (job.workerProfileId) {
@@ -358,7 +364,7 @@ async function handleRequest(req, res) {
     const body = await readJson(req);
     const embeddedPost = body.facebookPostUrl ? createFacebookPostEmbed({ postUrl: body.facebookPostUrl }) : undefined;
     job.status = normalizeFacebookCompleteStatus(body.status || (job.type === 'facebook-comment' ? 'commented' : 'published'));
-    job.result = { ...body, embeddedPost };
+    job.result = normalizeFacebookResult({ ...body, embeddedPost }, job);
     job.workerProfileId = normalizeProfileId(body.profileId) || job.workerProfileId;
     job.completedAt = new Date().toISOString();
     job.updatedAt = job.completedAt;
@@ -433,7 +439,7 @@ async function handleRequest(req, res) {
   const facebookJobMatch = pathname.match(/^\/api\/social\/facebook\/jobs\/([^/]+)$/);
   if (req.method === 'GET' && facebookJobMatch) {
     assertAuthorized(req);
-    sendJson(res, 200, { ok: true, job: findFacebookJob(facebookJobMatch[1]) });
+    sendJson(res, 200, { ok: true, job: normalizeFacebookJobForResponse(findFacebookJob(facebookJobMatch[1])) });
     return;
   }
 
@@ -1409,6 +1415,111 @@ function getAdminOverview() {
   };
 }
 
+function getAgentManifest(req) {
+  const baseUrl = publicBaseUrl(req);
+  return {
+    ok: true,
+    name: 'shopeeAI',
+    generatedAt: new Date().toISOString(),
+    baseUrl,
+    auth: {
+      type: 'bearer',
+      header: 'authorization',
+      valueFormat: 'Bearer <API_TOKEN>',
+      tokenRequired: Boolean(API_TOKEN),
+    },
+    admin: {
+      url: `${baseUrl}/admin/`,
+      overview: `${baseUrl}/api/admin/overview`,
+    },
+    workerModel: {
+      serverRole: 'Queue, cache, admin UI, API gateway, and result store.',
+      extensionRole: 'Chrome worker that uses real logged-in Shopee/Shopee Affiliate/Facebook sessions.',
+      requiredClientSetup: [
+        'Install extension/shopee-collector in every Chrome profile that should run jobs.',
+        `Set API Base to ${baseUrl}.`,
+        'Set API Token to the same bearer token used by this API.',
+        'Set a unique Profile ID for each browser profile.',
+      ],
+    },
+    recommendedFlow: [
+      'Check GET /health.',
+      'Check GET /api/shopee/extension/profiles and wait for at least one online worker.',
+      'Create Shopee jobs under /api/shopee/extension/*.',
+      'Poll job detail by id until status is completed, published, failed, cancelled, or published_pending_url.',
+      'For Facebook wrap jobs, use result.outputLink first, then result.primaryLink, then result.facebookPostUrl only as a fallback/debug link.',
+    ],
+    endpoints: agentEndpointGroups(),
+    statusValues: {
+      terminal: ['completed', 'published', 'commented', 'failed', 'cancelled', 'published_pending_url'],
+      active: ['queued', 'running', 'ready_for_publish'],
+    },
+  };
+}
+
+function publicBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host || `${HOST}:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+function agentEndpointGroups() {
+  return [
+    {
+      title: 'Health and admin',
+      endpoints: [
+        { method: 'GET', path: '/health', auth: false, purpose: 'Check server liveness.' },
+        { method: 'GET', path: '/api/admin/overview', auth: true, purpose: 'Dashboard summary, profiles, cache counts, and recent batches.' },
+        { method: 'GET', path: '/api/agent/manifest', auth: true, purpose: 'Machine-readable API/ops manifest for AI agents.' },
+      ],
+    },
+    {
+      title: 'Profiles',
+      endpoints: [
+        { method: 'GET', path: '/api/shopee/extension/profiles', auth: true, purpose: 'List connected Chrome extension workers.' },
+        { method: 'POST', path: '/api/shopee/extension/profiles/heartbeat', auth: true, purpose: 'Worker heartbeat; usually called by extension only.' },
+      ],
+    },
+    {
+      title: 'Shopee jobs',
+      endpoints: [
+        { method: 'POST', path: '/api/shopee/extension/product-info', auth: true, purpose: 'Queue product data collection.' },
+        { method: 'POST', path: '/api/shopee/extension/product-affiliate', auth: true, purpose: 'Queue product data, commission, and affiliate link collection.' },
+        { method: 'POST', path: '/api/shopee/extension/product-affiliate-fast', auth: true, purpose: 'Cache-aware product plus affiliate shortcut.' },
+        { method: 'POST', path: '/api/shopee/extension/product-affiliate-batch', auth: true, purpose: 'Batch multiple product affiliate jobs.' },
+        { method: 'POST', path: '/api/shopee/extension/affiliate-offer', auth: true, purpose: 'Queue commission/offer collection.' },
+        { method: 'POST', path: '/api/shopee/extension/affiliate-links', auth: true, purpose: 'Convert up to five product links to affiliate links.' },
+        { method: 'POST', path: '/api/shopee/extension/affiliate-links/batch', auth: true, purpose: 'Convert many links; server chunks jobs.' },
+        { method: 'POST', path: '/api/shopee/extension/product-links', auth: true, purpose: 'Collect product URLs from keyword/search/category.' },
+        { method: 'GET', path: '/api/shopee/extension/jobs/created?limit=100&light=1', auth: true, purpose: 'List queued/running/completed jobs.' },
+        { method: 'GET', path: '/api/shopee/extension/jobs/:id', auth: true, purpose: 'Read one job and result JSON.' },
+        { method: 'POST', path: '/api/shopee/extension/jobs/:id/retry', auth: true, purpose: 'Retry a failed/cancelled job.' },
+        { method: 'POST', path: '/api/shopee/extension/jobs/:id/cancel', auth: true, purpose: 'Cancel queued/running job.' },
+      ],
+    },
+    {
+      title: 'Facebook jobs',
+      endpoints: [
+        { method: 'POST', path: '/api/social/facebook/jobs', auth: true, purpose: 'Create Facebook publish/comment/wrap job.' },
+        { method: 'GET', path: '/api/social/facebook/jobs?limit=80&light=1', auth: true, purpose: 'List Facebook jobs.' },
+        { method: 'GET', path: '/api/social/facebook/jobs/:id', auth: true, purpose: 'Read one Facebook job result.' },
+        { method: 'POST', path: '/api/social/facebook/jobs/:id/retry', auth: true, purpose: 'Retry Facebook job.' },
+        { method: 'POST', path: '/api/social/facebook/embed', auth: true, purpose: 'Create Embedded Post URL/iframe from a Facebook post URL.' },
+        { method: 'POST', path: '/api/social/facebook/extract-shopee-links', auth: true, purpose: 'Extract Shopee links from Facebook text/hrefs/redirects.' },
+      ],
+    },
+    {
+      title: 'Cache and latest data',
+      endpoints: [
+        { method: 'GET', path: '/api/shopee/product-id?url=<encoded_url>', auth: true, purpose: 'Parse shopId/itemId/productKey.' },
+        { method: 'GET', path: '/api/shopee/cache/product/:productKey', auth: true, purpose: 'Read cached product data.' },
+        { method: 'POST', path: '/api/shopee/cache/clear', auth: true, purpose: 'Clear product, offer, affiliate, or all caches.' },
+        { method: 'GET', path: '/api/shopee/browser-product-data/latest', auth: true, purpose: 'Read latest product payload sent by extension.' },
+      ],
+    },
+  ];
+}
+
 function summarizeExtensionJob(job) {
   const preview = summarizeJobResultPreview(job.result);
   return {
@@ -1432,6 +1543,7 @@ function summarizeExtensionJob(job) {
 }
 
 function summarizeFacebookJob(job) {
+  const result = normalizeFacebookResult(job.result, job);
   return {
     id: job.id,
     source: 'facebook',
@@ -1444,17 +1556,81 @@ function summarizeFacebookJob(job) {
     scheduledAt: job.scheduledAt || '',
     hasResult: Boolean(job.result),
     resultPreview: {
-      name: job.result?.facebookPostUrl || job.result?.commentUrl || job.affiliateLink || '',
-      affiliateLink: job.affiliateLink || job.result?.affiliateLink || '',
-      facebookPostUrl: job.result?.facebookPostUrl || '',
-      visibleShopeeLink: job.result?.visibleShopeeLink || '',
-      facebookTrackedShopeeLink: job.result?.facebookTrackedShopeeLink || '',
-      facebookWrappedShopeeLink: job.result?.facebookWrappedShopeeLink || '',
+      name: result?.outputLink || result?.facebookPostUrl || result?.commentUrl || job.affiliateLink || '',
+      outputLink: result?.outputLink || '',
+      primaryLink: result?.primaryLink || '',
+      linkType: result?.linkType || '',
+      affiliateLink: job.affiliateLink || result?.affiliateLink || '',
+      facebookPostUrl: result?.facebookPostUrl || '',
+      visibleShopeeLink: result?.visibleShopeeLink || '',
+      facebookTrackedShopeeLink: result?.facebookTrackedShopeeLink || '',
+      facebookWrappedShopeeLink: result?.facebookWrappedShopeeLink || '',
     },
     error: job.error || '',
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
+}
+
+function normalizeFacebookJobForResponse(job) {
+  if (!job?.result) return job;
+  return {
+    ...job,
+    result: normalizeFacebookResult(job.result, job),
+  };
+}
+
+function normalizeFacebookResult(result, job = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const primaryShopeeLink = getPrimaryFacebookShopeeLink(result);
+  const facebookTrackedShopeeLink = result.facebookTrackedShopeeLink
+    || primaryShopeeLink.facebookTrackedShopeeLink
+    || primaryShopeeLink.url
+    || '';
+  const facebookWrappedShopeeLink = result.facebookWrappedShopeeLink
+    || facebookTrackedShopeeLink
+    || '';
+  const visibleShopeeLink = result.visibleShopeeLink
+    || primaryShopeeLink.visibleShopeeLink
+    || '';
+  const cleanShopeeLink = result.cleanShopeeLink
+    || primaryShopeeLink.cleanShopeeLink
+    || primaryShopeeLink.targetUrl
+    || '';
+  const outputLink = facebookWrappedShopeeLink
+    || facebookTrackedShopeeLink
+    || visibleShopeeLink
+    || cleanShopeeLink
+    || result.commentUrl
+    || result.facebookPostUrl
+    || job.affiliateLink
+    || '';
+  const linkType = facebookWrappedShopeeLink || facebookTrackedShopeeLink
+    ? 'facebook_wrapped_shopee_link'
+    : visibleShopeeLink || cleanShopeeLink
+      ? 'shopee_link'
+      : result.facebookPostUrl
+        ? 'facebook_post_url'
+        : job.affiliateLink
+          ? 'affiliate_link'
+          : '';
+  return {
+    ...result,
+    visibleShopeeLink,
+    facebookTrackedShopeeLink,
+    facebookWrappedShopeeLink,
+    cleanShopeeLink,
+    outputLink,
+    primaryLink: outputLink,
+    linkType,
+  };
+}
+
+function getPrimaryFacebookShopeeLink(result) {
+  const links = Array.isArray(result?.facebookShopeeLinks) ? result.facebookShopeeLinks : [];
+  return links.find((row) => row?.facebookTrackedShopeeLink || row?.url)
+    || links.find((row) => row?.visibleShopeeLink || row?.targetUrl || row?.cleanShopeeLink)
+    || {};
 }
 
 function summarizeBatch(batch) {
@@ -1491,6 +1667,7 @@ function summarizeProfile(profile) {
 
 function summarizeJobResultPreview(result) {
   if (!result || typeof result !== 'object') return {};
+  const facebookResult = normalizeFacebookResult(result);
   const productData = result.productData || result.product || result;
   const product = productData.product || productData;
   const affiliateOffer = result.affiliateOffer || result;
@@ -1511,10 +1688,13 @@ function summarizeJobResultPreview(result) {
     commission: affiliateOffer?.commission || bestCommission.estimatedCommissionAmount || '',
     offerAvailable: affiliateOffer?.available,
     affiliateLink,
-    facebookPostUrl: result.facebookPostUrl || '',
-    visibleShopeeLink: result.visibleShopeeLink || '',
-    facebookTrackedShopeeLink: result.facebookTrackedShopeeLink || '',
-    facebookWrappedShopeeLink: result.facebookWrappedShopeeLink || '',
+    outputLink: facebookResult.outputLink || '',
+    primaryLink: facebookResult.primaryLink || '',
+    linkType: facebookResult.linkType || '',
+    facebookPostUrl: facebookResult.facebookPostUrl || '',
+    visibleShopeeLink: facebookResult.visibleShopeeLink || '',
+    facebookTrackedShopeeLink: facebookResult.facebookTrackedShopeeLink || '',
+    facebookWrappedShopeeLink: facebookResult.facebookWrappedShopeeLink || '',
   };
 }
 
@@ -1876,7 +2056,7 @@ function normalizePostText(value) {
 
 function normalizePublishMode(value) {
   const mode = String(value || '').trim().toLowerCase();
-  return ['manual', 'draft', 'confirm', 'auto'].includes(mode) ? mode : 'draft';
+  return ['manual', 'draft', 'confirm', 'auto', 'test'].includes(mode) ? mode : 'draft';
 }
 
 function normalizeFacebookReadyStatus(value) {
